@@ -615,7 +615,7 @@ RYOTIDE §13 的四条，逐条落到 Kev：
 | RYOTIDE §13 不变量 | Kev 的落位 |
 |---|---|
 | **#1** 读位置必须落在标记上（诊断量 `marker_mass`） | **概念不适用**：读出的不是词表分布，没有「落在标记上的质量份额」这个量。等价命题改写成「**softmax 的输入必须恰好是那 K 个选项跨度的标量**」——它在构造上成立（`model.py:216-218` 只接受 `h_opts`，`opt_idx` 由 `encode` 算出）。Kev 自己的守卫换成**分布自检**：每条记录写 `raw_probability_sum` 与 `zero_count`（`benchmark.py:61`），实测见 §13.3 |
-| **#2** 前缀与标记表面形式耦合，必须成对扫 | **不适用**：标记是 token **id**（`SPECIAL` 编译期常量 → `convert_tokens_to_ids`，`model.py:104`、`model.py:106`），不存在「表面形式」这个自由度。同类耦合换成「**选项文本不可伪造分隔符**」——用一次正则改写把用户的 `<|name|>` 变成 `<¦name¦>`（`model.py:78-81`），并有 `AGENTS.md:416-417` 记录 |
+| **#2** 前缀与标记表面形式耦合，必须成对扫 | **不适用**：标记是 token **id**（`SPECIAL` 编译期常量 → `convert_tokens_to_ids`，`model.py:104`、`model.py:106`），不存在「表面形式」这个自由度。同类耦合换成「**选项文本不可伪造分隔符**」——用一次正则改写把用户的 `<\|name\|>` 变成 `<¦name¦>`（`model.py:78-81`），并有 `AGENTS.md:416-417` 记录 |
 | **#3** 只读最后一个位置 | **改写**：「**只读每题构造出来的那 K+1 个位置**」——K 个 `</opt>`（读出）+ 1 个 `<decide>`（只当 query，不产生 logit）（`model.py:121-125`、`model.py:217`）。它**不读末位**，也不读 `/opt` 之外的任何位置。「不物化词表维度」这一半成立得更彻底：骨干连 vocab head 都没有（`model.py:257`） |
 | **#4** 比较概率 / ECE 之前先确认 temperature | **成立，而且有两个方向要确认**：①T 是多少（`head.pt` 的 `Meta.temperature`，`checkpoint.py:61`；`/v1/models` 会报出来，`serve.py:307`）；②**`logits` 是不是已经除过 T**——Kev 的 rows 里是除过的，还原要**乘**（`metrics.py:241`），直觉方向相反（§9.5） |
 | （Kev 新增的） | **①「发布数字」与「服务默认」不是同一条精度路径**：所有已发布准确率走 **fp32 evaluation path**，而服务在 CUDA/MPS 上默认 **bf16**（`README.md:383`：*Published accuracy numbers use fp32 evaluation, not the bf16 serving path*；`checkpoint.py:89-92`）；<br>**②「选项顺序」在训练期是被打散的、在运行期只被度量**——所以任何「Kev 对顺序不敏感」的说法都超出了它的记录（§6.4） |

@@ -78,7 +78,7 @@ pplx-decider 与 RYOTIDE 同属「把 LLM 当分类器读」这一支：一次�
 
 | 维度 | RYOTIDE | pplx-decider-v1.1-27b |
 |---|---|---|
-| 权重来源 | 公开 LLM，全程 frozen | `Qwen/Qwen3.8-27B` **全量微调**（26,085,330,160 参数 + 1,305,600 的读出头），BF16 共 52.17 GB（§12） |
+| 权重来源 | 公开 LLM，全程 frozen | `Qwen/Qwen3.8-27B` **全量微调**（26,085,330,160 参数 + 1,305,600 的读出头），BF16 共 52.17 GB（§13、§15.5） |
 | 是否训练 | 否，零新增参数 | 是：训练改动全部 26.09 B 参数，**因此改数值也改 argmax**（§10） |
 | 决策机制 | 读标签 token 的 logits → 掩码 → softmax | 读**池化位置**的 hidden → **独立 255 行读出头** → 掩码 → `softmax(logits / T)`（§4、§5） |
 | 「typed」从哪来 | 请求声明的标签集，靠分词器保证单 token | **分词器**：702 个候选里能单 token 化的取前 255（`model.py:215-223`）；发布配置里的码表是**校验对象**（§2） |
@@ -955,13 +955,13 @@ if fixed_saving:
 | `source/src/autojev/report.py` | 892 | matplotlib 仪表盘 / 影片：从 `events.jsonl` 画训练曲线与里程碑 |
 | `source/src/autojev/__init__.py` | 0 | **空文件** |
 | `source/pyproject.toml` | 65 | 包定义 |
-| `config.json` | 137 | 骨干结构：64 层、每第 4 层 `full_attention`、`hidden_size` 5120、`vocab_size` 248,320、`mamba_ssm_dtype` float32 |
+| `config.json` | 146 | 骨干结构：64 层、每第 4 层 `full_attention`、`hidden_size` 5120、`vocab_size` 248,320、`mamba_ssm_dtype` float32 |
 | `decision_config.json` | 541 | **发布契约**：255 个 `codes` + `token_ids`、`temperature` 1.0087417621345625、`attention_mode`、`pooling`、`step` 2446、以及训练期九份代码的 sha256 |
 | `chat_template.jinja` | 169 | `enable_thinking=False` → 空思考块（`:165-166`）；不传时默认 xhigh 且前缀不闭合（`:46-48`、`:168`） |
 | `processor_config.json` | 61 | 图像处理器：`patch_size` 16、`merge_size` 2（⇒ 32 px/token）、默认尺寸夹在 65,536–4,194,304 px |
 | `tokenizer.json` | 19,989,492 B（LFS） | 码表的**真正来源**；本文在它上面重算过 `codes`/`token_ids`（§15） |
 | `readout.safetensors` | 2,611,288 B（LFS） | BF16 `[255, 5120]` 读出头，不带 bias；尺寸算术见 §4.2、§15 |
-| `model-0000{1..9},10,11-of-00011.safetensors` | 合计 52,170,660,320 B（LFS） | 骨干权重，**不含 `lm_head`** |
+| `model-0000{1..9},10,11-of-00011.safetensors` | 合计 52,170,802,640 B（LFS；逐文件相加，`release-manifest.json` 记的就是这组数；`model.safetensors.index.json` 的 `total_size` 52,170,660,320 是张量数据，差额是 11 个分片各自的头） | 骨干权重，**不含 `lm_head`** |
 | `release-manifest.json` | 199 | 逐文件字节数 + sha256、`decision_index: 61.56`、`checkpoint_verification_passed: true` |
 | `evaluation/checkpoint-verification.json` | — | 1,497 行开发折的复跑记录：`actual == expected`、`max_logit_delta` 0.0、`changed_answers` 0（产生它的代码与数据都不在仓里，§12） |
 | `evaluation/decision-index.json` | — | Decision Index 0.2.1 的完整读数：5 个 area、44 个 benchmark（38 个计入）、`index` 61.56 |

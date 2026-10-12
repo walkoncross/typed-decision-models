@@ -16,6 +16,7 @@
 
 | | RYOTIDE | Open-Jev |
 |---|---|---|
+| 权重来源 | 公开 LLM（Qwen3.5 / Gemma 4），全程 frozen | 公开基座（走查用的那一档是 `Qwen/Qwen3.5-2B`）+ **自训的 LoRA 与标量决策头**；上游发布的三个包是 `ZefanCai/Open-Jev-2B` / `-9B` / `-27B-v1.1`（基座 `Qwen/Qwen3.5-2B` / `Qwen/Qwen3.5-9B` / `Qwen/Qwen3.8-27B`，`README:33-35`），且**只含组件、不含合并后的 Qwen 权重**（`README:389`） |
 | 决策机制 | 读**标签 token** 在最后一个位置的 logits，掩码 + softmax | **逐候选点式打分**，再对候选分数做 softmax |
 | 需要训练 | 否，权重全程 frozen | 是：LoRA + 一个标量决策头 |
 | 「类型化」来自 | 标签必须是单 token（否则映射成 `A/B/C` 标记） | 请求里声明的 `answer_keys` + 响应校验 |
@@ -320,6 +321,13 @@ setattr(cloned, name, tensor.repeat_interleave(batch_size, dim=0))
 拷进 meta 参数（约三分之一从未生效）——**而服务仍然对 `/health` 回 "ready"，并且会从一个未加载
 的模型返回自信的数字**。这就是「看似合理却是错的」那一类失效，和 RYOTIDE 用 `marker_mass` 抓
 `<think>` 读错位置是同一个主题。
+
+**那 18 GiB 不是本篇走查的那一档**：`model.py:83-88` 把这一档的 bf16 权重逐项拆过账——
+`model.language_model` 12.89 GiB + embeddings 1.89 GiB = 14.78 GiB 会活过 `del full`，视觉塔 / `mtp` /
+`lm_head` 合计 3.19 GiB 被丢掉，**全量 17.98 GiB**。这是 27B 那一档（`ZefanCai/Open-Jev-27B-v1.1` 的基座
+`Qwen/Qwen3.8-27B`，27,781,427,952 参数 ⇒ bf16 ≈ 55.6 GB），而本文的实例走查用的是 2B（2,274,069,824 参数
+⇒ bf16 4,548,139,648 B ≈ 4.55 GB）。引自 `model.py:149-179` 的那句注释讲的是**多卡切分在 27B 上**
+才会遇到的失效，**不要把它读成 2B 的体量**。
 
 ## 9. 四条不变量对照
 

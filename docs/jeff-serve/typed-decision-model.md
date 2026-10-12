@@ -27,7 +27,7 @@ LLM「读」成分类器**，这篇讲的是**如何在那次「读」之上训�
 
 | 词 | 含义 | 代码位置 |
 |---|---|---|
-| **open LLMs** | 现成的公开权重：Gemma 4 31B + LoRA，**已合并**后发布 | `model.py:56-67`、`README:6` |
+| **open LLMs** | 现成的公开权重：Gemma 4 31B-it + LoRA，**已合并**后发布 | `model.py:56-67`、`README:6` |
 | **Jev-style** | 输入输出是 TypeSafe / JevBench 的线格式；字母读法继承自 SemIf | `typesafe.py`、`prompting.py`（`NOTICE`） |
 | **decision model** | 输出**封闭**在一个已知标签集上：不是文本，而是 `K` 个选项上的概率分布 | `head.py:160` `option_logits`、`LABELS` |
 | **one forward pass** | 一次前向、不生成任何 token | `model.py:93-100`，`usage.output_tokens = 0` |

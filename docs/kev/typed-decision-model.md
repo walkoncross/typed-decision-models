@@ -476,6 +476,14 @@ not that every occurrence of those digits means this claim.*（`scripts/verify_c
 第四张卡（`kev-27b.md`）**不在清单里**——与发布说明第 83 行「27B 的 51 GB 超过 GitHub 单资产 2 GB 上限，
 不做资产、只在 Hub 上」一致。这是**我算的**，不是抄的；命令在 §12.4。
 
+但「逐字节相符」这句只对 **`main`** 成立，清单里的 `revision` 字段指的是**另一个 commit**：以 `kev-4b` 为例，
+清单钉的是 `139fdd94f1b6a6ad80cc15e08fcb99cac885a101`（该 revision 上的 `README.md` 是
+`3eac08b65ac314e0ee1b4ae7ddda9440e39310effa5da3a2cdcb56a9f1249e76`），而清单记的那个值
+`e423ce0e3caf0a1e6ff996a58522946a97711e0439c5fea332a8861b02498435` 等于当前 `main`
+（`6cfce5c2fa4b4bd64026336ab649c5ca78857d52`）上的卡；Hub 的 `v1.0` tag 又是第三个 commit
+（`591dcb5bd6d05eb0b5131ea6608f93f10243335c`）。**按清单的 revision 去取那份 README 会对不上**——
+要复现这条对照，取的是 `main`。
+
 ---
 
 ## 9. 置信度从哪来，又怎么被改写
@@ -537,8 +545,8 @@ m.head.temperature = meta.temperature if opts.temperature is None else opts.temp
   否则会静默丢行（`scripts/calibrate_checkpoint.py:52-56`）；
 - 无条件写值要走 `--temperature T --reason …`，理由记进 `head.pt["temperature_fit"]`。
 
-Kev 1.0 的四个温度**全部来自留出条目**：0.8B 2.35 / 4B 2.41 / 9B 2.19 是**训练语料的留出条目**，
-27B 1.32 是**留出数据集**（`docs/releases/kev-1.0.md:39`）；发布说明同时说，
+Kev 1.0 的四个温度**全部来自留出数据**：0.8B 2.35 / 4B 2.41 是**训练语料的留出条目**，
+9B 2.19 与 27B 1.32 是**留出数据集**（`docs/releases/kev-1.0.md:39`）；发布说明同时说，
 两个小模型在留出数据集上的重拟合**被评估过、都没采纳**（第 39 行），
 4B 的判据是 Brier 差 −0.0001 [−0.0005, +0.0003]、ECE 0.025 vs 0.024
 （`docs/model-cards/kev-4b.md:239`）。

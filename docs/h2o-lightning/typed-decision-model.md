@@ -455,8 +455,8 @@ yes/no 问题会报 0.801 或 0.199，而不是 0.51。README 第 389–400 行�
 | 文件 | 是什么 | 大小 |
 |---|---|---|
 | `predictions.jsonl` | 3,474 行逐题读数 | 1,666,994 B |
-| `questions/plumb_s2k.jsonl` | 2,000 题（crh225/plumb-decisions） | 4,058,920 B |
-| `questions/eikos.jsonl` | 1,474 题（caiovicentino1/eikos-decisions） | 7,433,871 B |
+| `questions/plumb_s2k.jsonl` | 2,000 题（crh225/plumb-decisions） | 7,433,871 B |
+| `questions/eikos.jsonl` | 1,474 题（caiovicentino1/eikos-decisions） | 4,058,920 B |
 | `routing_thresholds.py` | 重算脚本（纯标准库，130 行） | 6,649 B |
 | `SHA256SUMS` | 上面每个文件的 sha256 | 624 B |
 | `ATTRIBUTION.md` | 两份题集的来源、许可与转换改动 | 1,728 B |

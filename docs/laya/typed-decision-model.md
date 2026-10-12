@@ -1,6 +1,6 @@
 # Laya 是如何用一次前向把 state 读成类型化决策的
 
-> 代码库：<https://github.com/NandaKishorM/laya>
+> 代码库：<https://github.com/NandhaKishorM/laya>
 > 对应 README 第 8 行：*Multilingual, non-autoregressive System 1 decision engine. Typed decisions
 > over 100+ languages in a single forward pass — 33 ms — trained with reinforcement learning
 > against strictly proper scoring rules (RLCD), with a router that picks the right checkpoint per
@@ -688,11 +688,17 @@ laya "My payment failed twice" --preset triage
 
 第一个请求会下载 checkpoint。建议同时钉住版本以便复现——`revisions.py:26-30` 有三个 reviewed SHA：
 
-| repo | reviewed SHA |
-|---|---|
-| `convaiinnovations/laya` | `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851` |
-| `convaiinnovations/laya-multilingual` | `e4e9ddf21a7b1903b7acffd8814ad4307bf63a67` |
-| `convaiinnovations/laya-typed-decisions` | `1a793eb568e6718f15941d08f85432581df534e3` |
+| repo | 编码器（`rl_agent_config.json` 的 `encoder`） | reviewed SHA |
+|---|---|---|
+| `convaiinnovations/laya` | `answerdotai/ModernBERT-large` | `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851` |
+| `convaiinnovations/laya-multilingual` | `jhu-clsp/mmBERT-base` | `e4e9ddf21a7b1903b7acffd8814ad4307bf63a67` |
+| `convaiinnovations/laya-typed-decisions` | `answerdotai/ModernBERT-large` | `1a793eb568e6718f15941d08f85432581df534e3` |
+
+三个仓的模型卡都没有 `base_model` 字段，基座只写在各自的 `rl_agent_config.json` 里；英文那条与 typed-decisions 那条
+共用同一个编码器（`ModernBERT-large`，421,293,830 参数），多语言那条换成了 `mmBERT-base`（321,908,998 参数）。
+另外 `convaiinnovations/laya` 自己被当**族仓**用：根目录是英文那份（`model.safetensors` 842,609,210 B），
+另带 `multilingual/`（643,835,514 B）与 `typed-decisions/`（842,609,220 B）两个子目录各一份权重——三份权重的
+正式仓仍是上面这三行。
 
 ```bash
 export LAYA_REVISION=reviewed        # 或直接给 commit

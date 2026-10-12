@@ -46,7 +46,7 @@ CLM 把 RYOTIDE 那条读法里的三个环节（读哪个位置、掩码到标�
 | | RYOTIDE | CLM |
 |---|---|---|
 | 是什么 | 一个读法：把冻结 LLM 读成分类器 | 一个读法 + 一套缓存：把决策读成两个嵌入的点积 |
-| 权重 | 公开 LLM，全程 frozen，**零新增参数** | 公开 Qwen3-8B **编码器**（frozen）+ **两个自训的 20M 投影头**（`Contrastive-LM/CLM-v0.1-8B`，约 75 MB） |
+| 权重 | 公开 LLM，全程 frozen，**零新增参数** | 公开 Qwen3-8B **编码器**（frozen）+ **两个自训的投影头**（各 9.4M 参数；`Contrastive-LM/CLM-v0.1-8B`，约 75 MB） |
 | 是否训练 | 否 | 是——但训的不是「怎么读」，是**两个投影**；训练目标就是推理时那一个式子（`finetune.py:177` 与 `engine.py:134`） |
 | 决策的运算 | 一次前向 → 取标记 token 的 logits | `head(state) · head(candidate)`，**没有参与决策的前向**（§4） |
 | 「typed」怎么保证 | 标签必须落在**单 token**，否则退化成字母标记 | 请求声明的 `criteria` / `levels`；**没有词表，所以没有掩码这一步**（§2） |
@@ -325,7 +325,7 @@ class Head(nn.Module):
 ```
 
 `heads.py:47-65`。`HIDDEN = 4096`、`PROJ_DIM = 512`（`heads.py:21-22`），
-默认 `width=1536, depth=3`（`finetune.py:259-260,496`）——两个 20M 量级的 MLP。
+默认 `width=1536, depth=3`（`finetune.py:259-260,496`）——两个 10M 量级的 MLP。
 前向只在 `torch.no_grad()` 里跑一次（`heads.py:104-109`），出来就 L2 归一化：
 
 ```python
@@ -384,6 +384,12 @@ def _clm_loss(state_head, action_head, logit_scale, states, actions, codes):
 
 > Each encoder is a frozen LLM backbone plus a 20M-parameter trainable projection head,
 > so inference is **one embedding per fresh text and a dot product per cached candidate**.
+
+注：这句里的 **20M 指的是两个头合计**——按 `heads.py:41-65` 的结构（`hidden → width → width*(depth-2) → proj`，
+各层带 bias、`depth-2` 个 LayerNorm）、`heads.py:21-22` 的 `HIDDEN=4096` / `PROJ_DIM=512` 与
+`finetune.py:496` 的默认 `width=1536, depth=3, layernorm=True` 手算，**单个头是 9,443,840**
+（6,292,992 + 2,360,832 + 3,072 + 786,944），两个头 18,887,680，加 1 个 `logit_scale` 共 **18,887,681**；
+×4 B 与发布文件 `CLM_v0.1-8B.pt` 的 75,557,149 B 闭合（余量是 pickle 容器）。**不是每个头 20M。**
 
 于是 RYOTIDE 的不变量 #3（只读最后一个位置）在这里没有对象，而**新的成本结构**是：
 

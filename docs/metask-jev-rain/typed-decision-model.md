@@ -56,7 +56,7 @@
 
 | 维度 | RYOTIDE | metask-jev-rain-31B |
 |---|---|---|
-| 权重从哪来 | 冻结的指令模型，零训练 | 官方 `gemma-4-31B-it-qat-w4a16-ct`（W4A16 compressed-tensors）**不合并**地挂一个自训 LoRA r16/α32（`DISCLOSURE.md:14-17`） |
+| 权重从哪来 | 冻结的指令模型，零训练 | 官方 `gemma-4-31B-it-qat-w4a16-ct`（W4A16 compressed-tensors；模型卡的 `base_model` 字段声明的是家族基座 `google/gemma-4-31B-it`，权重这一档由 `DISCLOSURE.md:5-13` 与 `ADAPTER_MANIFEST.json` 的 `served_base` 钉住）**不合并**地挂一个自训 LoRA r16/α32（`DISCLOSURE.md:14-17`） |
 | 标签集从哪来 | 请求里声明的标签，靠分词器保证单 token | 请求声明标签；每个标签展开成 2–12 种**写法**，运行期只留单 token 的那些（§2） |
 | 读位置怎么定 | 运行期扫前缀、按标记质量标定 | prompt 的末位是 chat 模板吐出的「空思考通道」，读它后面那一位；运行期没有任何扫描与阈值（§3） |
 | 一次前向读哪里 | 只读最后一个位置的一次 logits | 一次 prompt 前向 + **按候选数分档的 1-token 探针**；每次探针只取显式列出的 token id（§4） |
@@ -68,6 +68,13 @@
 一句话立场：**RYOTIDE 把「一次前向」压成一次调用；这一路把同一次决策拆成「一次 prompt 前向 + N 次 1-token
 探针」，用多花的输出 token 换「标签集与写法的自由度」**——候选不必是单 token 字母，可以是任意字符串，
 只要它至少有一种写法落在单个 token 上。
+
+**同一个作者还发布了 12B 那一档**（本文走查的是 31B）：`MeTask-Rain/metask-jev-rain-12B-trained` 是同一套结构
+换基座——根目录是 `google/gemma-4-12B-it-qat-q4_0-unquantized`（官方 QAT checkpoint，revision
+`b6ed86275a6a5735884e208bfed95b445a684ca2`）的 **int4 W4A16 compressed-tensors（AWQ，group size 32）**，
+`adapter/` 里是**不合并**的 LoRA（PEFT，rank 16 / alpha 32，q/k/v/o/gate/up/down，`adapter/adapter_model.safetensors`
+262,373,216 B），模型卡 `base_model_relation: adapter`；`model.safetensors` 8,421,320,792 B，参数量 11,959,730,224。
+两档的差别只在基座与量化档位，读法本身不变。
 
 ## §1 端到端数据流
 

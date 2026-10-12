@@ -16,7 +16,7 @@
 >
 > **本文读的是哪一个 revision**：`Cloudflare/clef` 的 `0b331204bb13fbd2ca93a64df1956f5b55478ce5`
 > （2026-10-09T18:46Z，25 个文件）。该仓**没有 Git 之外的代码来源**：这个 HF 模型仓就是上游本体，
-> `joint_schema_model.py` 只在这里发布过一份。**58 GB 的骨干权重未下载**；本文引用的权重数字只有两类——
+> `joint_schema_model.py` 只在这里发布过一份。**54.7 GB 的骨干权重未下载**；本文引用的权重数字只有两类——
 > `joint_head.safetensors`（256 MB，已完整下载）与 `model.safetensors.index.json`（111 KB）的内容，
 > 外加一个 19 MB 的 `tokenizer.json`。§15 给出复算，§16 列出未核项。
 
@@ -563,7 +563,7 @@ if media is not None:
 
 ## §13 文件对照表
 
-HF 仓 25 个文件中的全部非权重文件（权重是 12 个 `model-*.safetensors` 分片，合计 ≈ 58 GB，未下载）：
+HF 仓 25 个文件中的全部非权重文件（权重是 12 个 `model-*.safetensors` 分片，合计 ≈ 54.7 GB，未下载）：
 
 | 文件 | 大小 | 职责 |
 |---|---|---|
@@ -643,7 +643,7 @@ PY
 
 ## §15 实例走查：在发布产物上的复算
 
-本文没有跑任何上游程序：**没有下载 58 GB 权重、没有 `import joint_schema_model`、没有 GPU**。
+本文没有跑任何上游程序：**没有下载 54.7 GB 权重、没有 `import joint_schema_model`、没有 GPU**。
 下面五类数字全部来自发布产物本身，用**本文自己的脚本**算出。
 
 ### 15.1 头权重的容器算术（精确闭合）
@@ -664,7 +664,7 @@ PY
 | `evidence_layers`（2 层 `EvidenceRoutingLayer`） | 25,196,544 | 19.68 % |
 | 6 个 `*_projection`（各 `[1024, 5120]`） | 5,242,880 × 6 = 31,457,280 | 24.57 % |
 | `residual_scorer`（`[1024,4096]`+bias、`[1,1024]`+bias） | 4,196,353 | 3.28 % |
-| 4 个 LayerNorm + `type_embedding` | 17,408 | 0.01 % |
+| 4 个 LayerNorm + `type_embedding` | 19,456 | 0.02 % |
 | 3 个标量（`prior_logit_scale` / `joint_logit_scale` / `residual_gate`） | 3 | 0.00 % |
 | **合计** | **128,056,324** | 100 % |
 
@@ -816,7 +816,7 @@ Clef 属于**手写、且没有断言**的那一类——`chat_template.jinja` �
 
 按「不给看起来合理的值」的规矩，下面这些**本文没有算，也不猜**：
 
-- **任何由前向产生的概率、准确率、延迟。** 58 GB 权重未下载，`import joint_schema_model` 未执行
+- **任何由前向产生的概率、准确率、延迟。** 54.7 GB 权重未下载，`import joint_schema_model` 未执行
   （本机也没有 `torch` / `transformers==5.10.2` / GPU），所以 `noul` 的概率、`choice` 的分布、
   `score` 的期望值**一个都没有**。§11 里那些答案形状是**代码的形状**，不是任何一次运行的输出。
 - **README 两张结果表的数字本身。** §15.4 只核了**加粗规则**（哪一格是行内最优），

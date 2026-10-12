@@ -14,11 +14,27 @@ RYOTIDE 的立场是「**读**现成 LLM，不训练」；Quyet 的立场是「*
 
 | 维度 | RYOTIDE | Quyet |
 |---|---|---|
-| 权重来源 | 公开 LLM（Qwen3.5 / Gemma 4），全程 frozen | 自训权重（`chinhnc/Quyet-1.0-*`），HF 上发布 |
+| 权重来源 | 公开 LLM（Qwen3.5 / Gemma 4），全程 frozen | 自训权重（`chinhnc/Quyet-1.0-*`），HF 上发布；但**起点同样是公开 LLM**——LLM 两条在公开**指令**模型上微调、合并后发布，encoder 三条是公开编码器加一个自训打分头 |
 | 「typed」从哪来 | 借来的 tokenizer：标签必须能落到**单 token**，落不到就映射成字母标记 | 训练时就固定的槽位：encoder 用 `[MASK]` 槽位，LLM 用字母 `A..J` |
 | 读位置的确定 | **运行期标定**（扫 9 个 answer prefix × 2 个标记表面形式，取 marker mass 最高） | **训练期固定**，运行期只有一个常量：`prompt_version` |
 | 后端 | MLX + torch 两个后端，一套 `jevbench_adapter` 适配器 | encoder（ModernBERT + 打分头）与 LLM（字母 logits）两条**并行** runtime，只有问题解析/答案成形/温度三处共享 |
 | 置信度来源 | 运行期读位置标定 + 逐 preset 钉死的 temperature（拟合自 benchmark 留出集） | 逐模型、逐题型的 temperature，写在模型自带的 `quyet_config.json` 里 |
+
+**「自训」指的是打分头与微调的来源，不是「从零训一个模型」。** 五份发布权重分两条路，基座逐份记在模型仓
+`quyet_config.json` 的 `base_model.repo`（连同 `base_model.revision`）里——就是 `hub.py:32` 加载时读的那份文件：
+
+| 发布 | `kind` | 基座（`base_model.repo`） | 备注 |
+|---|---|---|---|
+| `Quyet-1.0-Large` | `llm` | `google/gemma-4-31B-it` | prompt_version 2；合并 LoRA rank 16（模型卡）；**指令版**基座，不是 `google/gemma-4-31B` |
+| `Quyet-1.0-Medium` | `llm` | `Qwen/Qwen3.5-4B` | prompt_version 1 |
+| `Quyet-1.0-Small` | `encoder` | `aisingapore/SEA-LION-ModernBERT-300M` | head `refine_pool_v1` |
+| `Quyet-1.0-Small-EN` | `encoder` | `answerdotai/ModernBERT-base` | head `option_query_v1` |
+| `Quyet-1.0-Tiny` | `encoder` | `jhu-clsp/mmBERT-small` | head `option_query_wide`；只保留 16 层（`layers_kept: 16`） |
+
+两条 LLM 的 `source` 记的是 `step` + `adapter_sha256`，encoder 三条记的是 `weights_sha256`；Large 的基座 revision 是
+`842da3794eaa0b77d5f08bae87a17459d91ff475`，与模型卡 `base_model: google/gemma-4-31B-it` 一致。所以与 RYOTIDE 的差别
+不在「用不用公开 LLM」，而在**这份公开权重有没有被训练过**：那边全程 frozen、读位置运行期标定，这边微调过、读位置
+在训练时就固定下来（§3.2 那条 chat template 正是随指令版基座一起带进来的）。
 
 共同点只有一条，而且是最本质的那条：**产出分布的方法完全一样**——一次前向、只读最后一个位置、
 把 logits 掩码到已知选项集、softmax 重归一化。`answers.py:30` 的 `"output_tokens": 0` 是这条立场最直白的证据。

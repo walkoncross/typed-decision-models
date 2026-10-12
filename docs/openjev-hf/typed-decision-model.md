@@ -712,7 +712,7 @@ Python 字面量写成文本」（`shim.py:186`、`serve/SERVE.md:66`）。但 `
 | `generation_config.json` | 13 | 采样默认（`temperature 1.0` / `top_k 20` / `top_p 0.95`）——**补丁完全不使用它**，每次都显式传 `temperature=0` |
 | `README.md` | 199 | 模型卡：结果表、格式表、请求上限、"How it works, in one paragraph"（`:191`）。**本文只当线索用** |
 | `MANIFEST.json` / `SHA256SUMS` | 122 / 30 | 逐文件 sha256。两者对 `README.md` 的条目都过期（§13.3） |
-| `model.safetensors.index.json` + 12 个分片 | — | 权重（约 54 GB，BF16）。本仓库只留 LFS 指针，未下载 |
+| `model.safetensors.index.json` + 12 个分片 | — | 权重：索引里 `total_size` = 54,713,457,120 B（= 参数量×2），12 个分片逐文件求和 54.71 GB 十进制（50.96 GiB），BF16。参数量 **27,356,728,560**，比基座 `Qwen/Qwen3.8-27B` 的 27,781,427,952 少 424,699,392（≈0.42B），所以「微调过的 Qwen3.8-27B」不是基座参数的完整副本。本仓库只留 LFS 指针，未下载 |
 | （无 `results/`、无训练代码、无 tokenizer 训练脚本） | — | `noul` 的拟合结果 `results/noul_calibration.json` 只被引用（`shim.py:23`），**不在这个仓库**；微调过程本身也不在这里 |
 
 ## 16. 亲手跑一遍

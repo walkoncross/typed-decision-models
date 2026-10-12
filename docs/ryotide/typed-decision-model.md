@@ -179,7 +179,7 @@ torch 路径还有一层加速：`read_batch()`（`torch_backend.py:231`）把�
 两个**正确性**细节，注释里都是踩过坑的结论：
 
 - `fork_cache()`（`branch.py:33`）对 `ArraysCache`（Qwen3.5 的线性注意力层，固定大小 recurrent state、没有 offset 可回卷）只复制列表——其槽位是写时重绑而非就地修改，所以列表拷贝就足以让兄弟分支互不影响。
-- 对 `RotatingKVCache`（Gemma 4 的 24 层里有 20 层滑动窗口）必须**给每个分支自己的 buffer**：环形缓冲一旦绕回，`state` 交回的就是 buffer 本身，单 token 写入会**就地**落进父级，copy-on-write 的 fork 会把父级写花。便宜是因为它被窗口（512 token）限界。
+- 对 `RotatingKVCache`（Gemma 4 **E4B** 的 **42 层里有 35 层**滑动窗口，`google/gemma-4-E4B-it` 的 `config.json`；上游 `branch.py:53` 的注释写的是「20 of 24」，与配置不符）必须**给每个分支自己的 buffer**：环形缓冲一旦绕回，`state` 交回的就是 buffer 本身，单 token 写入会**就地**落进父级，copy-on-write 的 fork 会把父级写花。便宜是因为它被窗口（512 token）限界。
 - `trim_to()` 在任何层不可回卷时**直接报错**，而不是静默 no-op：recurrent state 没有 offset 可退，静默什么都不做会把一个问题泄漏进下一个——正是这套设计要避免的交叉污染。
 
 `generate.py` 则演示了模式 2：判类之后，分支 cache 里已经有 state + 问题，把结果注入（json / prose / bare 三种格式，`ab_injection()` 让格式选择成为一次测量而非争论）再解码，代价只有注入 + 解码。

@@ -15,11 +15,12 @@
 | Laya | [`docs/laya/typed-decision-model.md`](docs/laya/typed-decision-model.md) | 逐环节实现走查:14 节,从"`[MASK]` 槽位而不是单 token 标签""读 K 个槽位而不是最后一个位置""顺序偏置在训练时消解"到"RLCD 到底是什么",含路由器、fail-loud 守卫表与四条不变量的落位 |
 | SemIf-OpenJev | [`docs/semif-openjev/typed-decision-model.md`](docs/semif-openjev/typed-decision-model.md) | 逐环节实现走查:18 节,从"字母槽位 A–P 的三重校验""固定末位、诊断量只上报不标定""共享 state 的三种 cache 复制策略"到"浏览器路径是唯一违反 `output_tokens = 0` 的一条",含 reranker 对照臂、逐 workload 温度链与四条不变量的落位 |
 | OpenJev(HF) | [`docs/openjev-hf/typed-decision-model.md`](docs/openjev-hf/typed-decision-model.md) | 逐环节实现走查:18 节,从"52 个字母槽位与请求里的 `criteria`""两条读数协议(TARGETED 与 top-K 兜底)""超过 52 个选项的分块两级近似"到"代码默认值 ≠ 发布配方常数",含 agent state 压缩与截图通道、`/v1/version` 自证、四条不变量的落位 |
-| 跨实现对照 | [`docs/comparison.md`](docs/comparison.md) | 七路总表:主对照表、谁在改发布数值、四条不变量的跨篇落位、同一坑的各家修法、数字可比较性口径。只做索引与总表,论证仍在各篇 |
+| vLLM Semantic Router | [`docs/semantic-router/typed-decision-model.md`](docs/semantic-router/typed-decision-model.md) | 逐环节实现走查:17 节,从"三代模型 × 三套读出协议(encoder 的 `[MASK]` 槽位 / decoder 的选项端点 / Vela 2.0 的八标记)""四档 profile:exact 目标逐字节相同"到"Go 侧不用模型报的 `confidence`,自己从 `probabilities` 重算",含加载期 golden 自检、committed golden answers 上的重算实例与 JevBench 闭环 |
+| 跨实现对照 | [`docs/comparison.md`](docs/comparison.md) | 八路总表:主对照表、谁在改发布数值、四条不变量的跨篇落位、同一坑的各家修法、数字可比较性口径。只做索引与总表,论证仍在各篇 |
 
 ## 关于各篇文档
 
-七篇都是从**只读代码**出发写的实现走查,不是复述 README。每篇的代码引用(`classify.py:42`、`head.py:160`、`api.py:48`、`questions.py:38`、`common.py:634` 等)均相对**其对应仓库**的根目录,本仓库只留文档副本,不含任何源码。
+八篇都是从**只读代码**出发写的实现走查,不是复述 README。每篇的代码引用(`classify.py:42`、`head.py:160`、`api.py:48`、`questions.py:38`、`common.py:634` 等)均相对**其对应仓库**的根目录,本仓库只留文档副本,不含任何源码。
 
 | 文档 | 上游代码库 | 来源 |
 |---|---|---|
@@ -30,22 +31,24 @@
 | `docs/laya/typed-decision-model.md` | [NandaKishorM/laya](https://github.com/NandaKishorM/laya) | **非副本**:读 `laya/` 源码在本仓库直接写成,上游 `docs/` 下没有对应文章 |
 | `docs/semif-openjev/typed-decision-model.md` | [TheoLeeCJ/SemIf-OpenJev](https://github.com/TheoLeeCJ/SemIf-OpenJev) | **非副本**:读 `src/semif_phase1/` 源码在本仓库直接写成,上游 `docs/` 下只有 METHOD/CALIBRATION/RESULTS 等项目文档,没有对应的走查稿。注意与上表的 `docs/open-jev/` 是两个不同仓库 |
 | `docs/openjev-hf/typed-decision-model.md` | [openjev/openjev](https://huggingface.co/openjev/openjev) | **非副本**:读 `helper/` 与 `serve/` 源码在本仓库直接写成。上游是 **Hugging Face 上的模型仓**(权重 + 这两个代码目录),没有对应的走查稿。注意 `docs/open-jev/`、`docs/semif-openjev/` 与它是**三套不同代码** |
+| `docs/semantic-router/typed-decision-model.md` | [vllm-project/semantic-router](https://github.com/vllm-project/semantic-router) | **非副本**:读 `src/model-runtime/vllm_srun/`、`src/semantic-router/pkg/` 与 `tools/calibration/` 源码在本仓库直接写成。上游 `website/docs/` 下只有面向用户的项目文档(含一份 `/v1/decisions` 的参考页),没有对应的走查稿。它是八篇里唯一一篇「运行时 + 控制面」而非单个读法的走查 |
 
-前四篇正文均未改动,只在文首补了代码库地址与「行号相对仓库根目录」的说明,并把指向 RYOTIDE 那篇的路径改写为本仓库内的相对路径。Laya、SemIf-OpenJev 与 OpenJev(HF) 三篇同理在文首带代码库地址与行号基准说明,但它们没有上游原件可比对——改它们就是在改唯一的一份。三篇「非副本」里,只有 OpenJev(HF) 的上游不是 Git 代码仓,`git clone` 得到的是权重仓(LFS 需跳过)。
+前四篇正文均未改动,只在文首补了代码库地址与「行号相对仓库根目录」的说明,并把指向 RYOTIDE 那篇的路径改写为本仓库内的相对路径。Laya、SemIf-OpenJev、OpenJev(HF) 与 Semantic Router 四篇同理在文首带代码库地址与行号基准说明,但它们没有上游原件可比对——改它们就是在改唯一的一份。这四篇「非副本」里,只有 OpenJev(HF) 的上游不是 Git 代码仓,`git clone` 得到的是权重仓(LFS 需跳过);Semantic Router 的上游是 Git 仓,但它是八篇里体量最大的一个:一个 Go 控制面 + 一个 Python 运行时 + 一套 JevBench 闭环评测,本文只走「类型化决策」这一条线。
 
-七条路线可以放在一起读,分歧集中在「读位置怎么定、置信度从哪来」:
+八条路线可以放在一起读,分歧集中在「读位置怎么定、置信度从哪来」:
 
 - **RYOTIDE**:零训练,把冻结 LLM 读成分类器——运行期标定读位置、掩码 + 重归一化,`marker_mass` 是它的诊断量;
 - **Jeff**:在 RYOTIDE 那条读法之上**训一个决策头**,`slice_init_` 让训练起点逐位等于零样本读法;
 - **Open-Jev**:把决策拆成 N 个 pointwise 的是非题,再训一个 `Yes − No` 播种的标量头读成校准打分;
 - **Quyet**:自训权重,encoder 用 `[MASK]` 槽位、LLM 用字母 `A..J`,温度随权重一起发布;
 - **Laya**:双向编码器,把决策改造成**填空题**——每个选项一个 `[MASK]` 槽位,一次前向读 K 个标量;顺序偏置在训练时用 `parallel` 布局消解,另有一个不跑模型的**路由器**逐请求挑 checkpoint;
-- **SemIf-OpenJev**:同样零训练,但把读法工程化到**三个运行时 + 一个浏览器**,并配一条独立的校准链——读末位的字母槽位 `A`–`P`,顺序偏置不消除只度量(反转选项顺序翻转 10/36 的 argmax),浏览器那条路径是七篇里唯一**会生成 1 个 token** 的;
-- **OpenJev(HF)**:微调过的 27B + 一个挡在 vLLM 前面的 HTTP 补丁——读**第一个输出位置**上 52 个字母的 logits,训练把顺序偏置从 18.5% 压到 2.3%,而 T=0.85 / noul 的 (1.829074, 0) 是训练之后施加的常数,且**代码里的默认值与发布配方全都不同**。
+- **SemIf-OpenJev**:同样零训练,但把读法工程化到**三个运行时 + 一个浏览器**,并配一条独立的校准链——读末位的字母槽位 `A`–`P`,顺序偏置不消除只度量(反转选项顺序翻转 10/36 的 argmax),浏览器那条路径是八篇里唯一**会生成 1 个 token** 的;
+- **OpenJev(HF)**:微调过的 27B + 一个挡在 vLLM 前面的 HTTP 补丁——读**第一个输出位置**上 52 个字母的 logits,训练把顺序偏置从 18.5% 压到 2.3%,而 T=0.85 / noul 的 (1.829074, 0) 是训练之后施加的常数,且**代码里的默认值与发布配方全都不同**;
+- **vLLM Semantic Router**:不是一篇读法而是一个**运行时**——同一个 `/v1/decisions` 底下挂三代模型、三套读出协议(encoder 的 `[MASK]` 槽位 / decoder 的选项端点 / Vela 2.0 的八个标记 token)与四档数值 profile,`exact` 的目标是与发布包**逐字节相同**;Go 控制面拿到 typed answer 后**不用**模型报的 `confidence`,而是自己从 `probabilities` 重算一个,并拿 JevBench 标定自己的升级门。
 
-共同底线只有一条,也是 RYOTIDE 第 13 节那四条不变量的来源:**一次前向、只读最后一个位置、掩码到已知标签集、重归一化,`output_tokens = 0`**。违反时数字会看似合理却是错的——七条路线都在同一个主题上记录了各自的踩坑方式。两处例外都在「会生成 1 个 token」这一侧:SemIf-OpenJev 的浏览器路径用一次 1-token 的解码换一个能返回 logprobs 的接口,读的仍是被迫输出的那个 token 的 `top_logprobs`(其 §9);OpenJev(HF) 对 vLLM 发 `max_tokens: 1`,而响应里 `output_tokens: 0` 是**硬编码**的(其 §4)。
+共同底线只有一条,也是 RYOTIDE 第 13 节那四条不变量的来源:**一次前向、只读最后一个位置、掩码到已知标签集、重归一化,`output_tokens = 0`**。违反时数字会看似合理却是错的——八条路线都在同一个主题上记录了各自的踩坑方式。两处例外都在「会生成 1 个 token」这一侧:SemIf-OpenJev 的浏览器路径用一次 1-token 的解码换一个能返回 logprobs 的接口,读的仍是被迫输出的那个 token 的 `top_logprobs`(其 §9);OpenJev(HF) 对 vLLM 发 `max_tokens: 1`,而响应里 `output_tokens: 0` 是**硬编码**的(其 §4)。Semantic Router 是这条底线上**最干净**的一条:`output_tokens` 在响应组装处硬编码为 0(其 §2.2),三套读法没有一条会生成 token。
 
-并读才看得见的东西(`enable_thinking=False` 的诸种接法、填充方向、混合架构的 cache 分支复制、温度口径、ECE 分箱不一致、已校准与未校准是两份文件、**代码默认值 ≠ 发布配方**)汇总在 [`docs/comparison.md`](docs/comparison.md)。
+并读才看得见的东西(`enable_thinking=False` 的诸种接法、填充方向、混合架构的 cache 分支复制、温度口径、ECE 分箱不一致、已校准与未校准是两份文件、**代码默认值 ≠ 发布配方**、**同一个字段名在不同代际是两个公式**)汇总在 [`docs/comparison.md`](docs/comparison.md)。
 
 ## 收录约定
 

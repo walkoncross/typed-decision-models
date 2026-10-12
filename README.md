@@ -12,6 +12,7 @@
 | Jeff | [`docs/jeff-serve/typed-decision-model.md`](docs/jeff-serve/typed-decision-model.md) | 逐环节实现走查:15 节,从"决策头 = 把「读」变成可训练参数"到"四条不变量在 Jeff 里的状态",含 choice / noul / 27 选项三条实例走查与文件对照表,全程与 RYOTIDE 逐节对照 |
 | Open-Jev | [`docs/open-jev/typed-decision-model.md`](docs/open-jev/typed-decision-model.md) | 逐环节实现走查:12 节,从"Yes−No 播种决策头""pointwise 逐候选打分""两级 LCP 前缀缓存"到"fail-loud 风格",含 4 候选与 255 候选两条实例走查与温度还原 |
 | Quyet | [`docs/quyet/typed-decision-model.md`](docs/quyet/typed-decision-model.md) | 逐环节实现走查:12 节,从"两条 runtime(encoder / LLM)""MASK 槽位与字母槽位""左填充的逐位精确性"到"四条不变量",每个环节与 RYOTIDE 对照 |
+| 跨实现对照 | [`docs/comparison.md`](docs/comparison.md) | 四路总表:主对照表、谁在改发布数值、四条不变量的跨篇落位、同一坑的各家修法、数字可比较性口径。只做索引与总表,论证仍在各篇 |
 
 ## 关于各篇文档
 
@@ -35,6 +36,12 @@
 
 共同底线只有一条,也是 RYOTIDE 第 13 节那四条不变量的来源:**一次前向、只读最后一个位置、掩码到已知标签集、重归一化,`output_tokens = 0`**。违反时数字会看似合理却是错的——四篇都在同一个主题上记录了各自的踩坑方式。
 
+并读才看得见的东西(`enable_thinking=False` 的三种接法、填充方向、混合架构的 cache 别名坑、温度口径、ECE 分箱不一致)汇总在 [`docs/comparison.md`](docs/comparison.md)。
+
 ## 收录约定
 
-新增实现或案例时,在 `docs/<实现名>/` 下建目录,一事一文,并在上表登记一行。同一实现的文档放在同一子目录里,文件名直接写主题(如 `typed-decision-model.md`、`calibration.md`),不再重复实现名。代码引用带文件名与行号,概率、准确率一类的数字标注来源 run 与 temperature。
+新增实现或案例时,在 `docs/<实现名>/` 下建目录,一事一文,并在上表登记一行。同一实现的文档放在同一子目录里,文件名直接写主题(如 `typed-decision-model.md`、`calibration.md`),不再重复实现名。
+
+跨实现的总表放 `docs/` 顶层(如 `docs/comparison.md`),不进任何单个实现的子目录——它不属于某一个实现,且这样各篇更新时顶层只需改表格格子。总表定位为**索引**,不复制各篇的论证,需要论证的地方链回原文。
+
+正文取自上游的副本保持逐字不动,改动只限文首的代码库地址、行号基准说明和库内相对链接,以便按路径与上游比对。代码引用带文件名与行号,概率、准确率一类的数字标注来源 run 与 temperature。

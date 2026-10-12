@@ -52,7 +52,7 @@ Jeff 的头（t=0）  ≡  RYOTIDE 的读法
 训练              =  在这条读法上学习一组修正 A, b
 ```
 
-RYOTIDE 是 Jeff 的**初始化点**，不是它的替代方案。第 3 节展开。
+RYOTIDE 是 Jeff 的**初始化点**，不是它的替代方案。第 3 节展开，并给出上式每个符号在代码里的落点。
 
 ---
 
@@ -205,7 +205,43 @@ RYOTIDE 是运行期按标签集解析并给出换词建议，Jeff 是**编译�
 | `typed-residual` | 同 `residual`，但 `delta` 输出 `3 × k_slots`，按问题类型 `q` 取一份 | 同上 | — |
 | `typed-regression` | `residual` + `score_regression`，对归一化 level 做高斯 `center/spread` | `spread ≈ 0.20` | — |
 
-`README:15` 印的公式正是 `residual`。逐点说明：
+### `README:15` 的公式：逐符号对照
+
+`README:15` 印的公式正是 `residual` 这一行——§4 讲 `h` 从哪来，§5 讲 `z` 怎么变成 `p`：
+
+```python
+z = c·tanh(W0 h / c) + A·std(h) + b,     p = softmax(z_1, …, z_K)      # README:15
+```
+
+| 符号 | 含义 | 代码变量 | 位置 |
+|---|---|---|---|
+| `z` | 本题的选项 logit 向量，长度 `K`：softmax 的输入 | `option_logits()` 返回的 `options`（已掩码） | `head.py:173-174`、`:182`、`:193` |
+| `h` | 一次前向在**最后一个 prompt 位置**的隐状态（post-final-norm，`[1, d_model]`）——正是 LM 自己的 head 要读的那个位置 | `hidden` → `h` | `model.py:94-96`（bf16 往返见 §4） |
+| `W0` | LM **输出嵌入**里「答案字母」那几行，`[k_slots, d_model]`；第 j 行 = `LABELS[j]`。**冻结**（`register_buffer` 不进优化器） | `base_rows` | `head.py:83`、`:107-118` |
+| `W0 h` | LM 自己读字母得到的原始 logit——零样本读法本身 | `_cap(h @ self.base_rows.T)`，即 `raw` | `head.py:173` |
+| `c` | **final-logit soft-capping 常量**（Gemma 4 为 30.0），把 logit 压进 `(−c, c)`；Qwen 系无此常量，退化为恒等 | `self.softcap`、`_cap()` | `head.py:69`、`:145-147`、`:282-287` |
+| `A` | **学出来的修正权重矩阵**，`[k_slots, d_model]`，作用在标准化后的 `h` 上 | `delta.weight` | `head.py:86` |
+| `b` | 修正偏置，`[k_slots]` | `delta.bias` | `head.py:86` |
+| `std(h)` | **逐维 z-score，不是 h 的标准差**：`(h − mu)/sigma`；`mu`/`sigma` 在训练集上算好、存进 checkpoint | `_std()`、`set_standardization()` | `head.py:132-134`、`:120-125` |
+| `A·std(h) + b` | 两项合起来就是一个线性层的仿射映射 | `self.delta(u)` | `head.py:176-182` |
+| `A=0, b=0` | 初始化时修正项清零，于是 `t=0` 时 `z = c·tanh(W0 h / c)`，**逐位等于零样本读法** | 两次 `nn.init.zeros_` | `head.py:87-88` |
+| `p` | `K` 个选项上的概率分布，和为 1；没有东西需要解析，也没有东西可以幻觉（§5） | `probs` | `model.py:99-100` |
+| `K` | 本题的选项数；`z` 只有前 `K` 项有效，其余槽位掩成 `-inf` | `k`（张量 `[B]`）、`invalid` | `model.py:97`、`head.py:164` |
+
+四点须知：
+
+1. **softcap 只包住第一项**。代码是先 `_cap(W0 h)`、再 `+ delta`（`head.py:173` → `:182`），修正项不过
+   tanh；README 的括号范围与之一致，下面的逐点说明里有它为什么不能漏。
+2. **`A·std(h)` 是简写**。喂给 `delta` 的实际输入是 `u = _std(h, extra)`：若开了 `extra`（早期层隐状态，
+   `extra_dim=0` 时关闭）还要拼上它；`temperature` kind 的 `u` 另加三个零样本统计量（最大概率、
+   归一化熵、`log k`，`head.py:136-143`，且只在 temperature 下启用，`head.py:72`）。对发布用的
+   `residual`，`u` 恰好就是 `std(h)`。
+3. **`c` 在这一节的另一处公式里是另一个东西**：`temperature` kind 的 `T = t_min + softplus(a·u + c)`
+   里那个 `c` 是 `temp.bias`（加性偏置），与 softcap 无关。
+4. **公式里的 `A` 与标签 `A` 无关**。`LABELS[0]` 就是字母 `A`，它恰好是 `W0` 的第 0 行；矩阵 `A` 只是
+   「修正」的记号。
+
+以下逐点说明（含 `residual` 之外的 kind）：
 
 - **`slice_init_` 是「训练起点 = 零样本」这条性质的实现**（`head.py:107-118`）。
   `collect_letter_rows()`（`head.py:251-262`）用 `model.get_output_embeddings()`（**正确处理 tied

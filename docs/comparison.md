@@ -381,7 +381,7 @@ decisio 那条是**第七种**：**作者写全了、注释也写了，而读者
 
 ## 5. 数字的可比较性：十九处口径不一致
 
-跨实现引用概率、准确率、ECE 之前，有十五组口径必须先对齐，否则会得到看似合理的错数。
+跨实现引用概率、准确率、ECE 之前，有十九组口径必须先对齐，否则会得到看似合理的错数。
 
 1. **温度**（§2）。十八篇都记录了同一个现象：同一条记录、同一个 argmax，顶部概率可以差一个量级。
 2. **ECE 分箱**。RYOTIDE 走的是 vendored JevBench 的 **10 个等宽分箱**（`vendor/jevbench/jevbench/metrics.py:55`）；Open-Jev 与 Laya 各自实现的是 **15 箱**（分别 `metrics.py:98` 的 `n_bins=15`、`common.py:766` 的 `bins: int = 15`）。**10 箱与 15 箱的数字不可直接互比**（Open-Jev §6 明确记了这一点）。SemIf-OpenJev 用的是 **10 箱**（`benchmarks/calibrate.py:134` 与 `benchmarks/evaluate.py:135` 都是 `bins=10`），Nimble 也是 **10 箱**（`evaluate_public.py:18` 的 `BINS = 10`，`evaluate_public.py:72-88`）——这两条与 RYOTIDE 在这一层同口径，与另外两条不同。Nimble 的报告里还把口径本身写进产物：`"confidence": "top candidate probability; no temperature has been fitted"`（`evaluate_public.py:157-159`），也就是**那批公开基准的 ECE 是在 T=1.0（未校准）下算的**，而它们的 revision 也不是有拟合温度的那一个（§2）。

@@ -9,14 +9,31 @@
 | 实现 | 文档 | 内容 |
 |---|---|---|
 | RYOTIDE | [`docs/ryotide/typed-decision-model.md`](docs/ryotide/typed-decision-model.md) | 逐环节实现走查:15 节,从"读位置标定""掩码 + 重归一化""KV cache 分支策略"到"置信度从哪来、又怎么被度量",含实例走查、四条不变量与文件对照表 |
+| Jeff | [`docs/jeff-serve/typed-decision-model.md`](docs/jeff-serve/typed-decision-model.md) | 逐环节实现走查:15 节,从"决策头 = 把「读」变成可训练参数"到"四条不变量在 Jeff 里的状态",含 choice / noul / 27 选项三条实例走查与文件对照表,全程与 RYOTIDE 逐节对照 |
+| Open-Jev | [`docs/open-jev/typed-decision-model.md`](docs/open-jev/typed-decision-model.md) | 逐环节实现走查:12 节,从"Yes−No 播种决策头""pointwise 逐候选打分""两级 LCP 前缀缓存"到"fail-loud 风格",含 4 候选与 255 候选两条实例走查与温度还原 |
+| Quyet | [`docs/quyet/typed-decision-model.md`](docs/quyet/typed-decision-model.md) | 逐环节实现走查:12 节,从"两条 runtime(encoder / LLM)""MASK 槽位与字母槽位""左填充的逐位精确性"到"四条不变量",每个环节与 RYOTIDE 对照 |
 
-## 关于 `docs/ryotide/typed-decision-model.md`
+## 关于各篇文档
 
-该文是对 [RYOTIDE](https://github.com/csabag/ryotide) 实现的逐文件说明,按 `src/ryotide/` 的实际代码组织。其中的代码引用(`classify.py:42`、`jevbench_adapter.py`、`bench/fit_temperature.py` 等)均指该仓库根目录下的路径,本仓库只留文档副本,不含其源码。
+四篇都是从**只读代码**出发写的实现走查,不是复述 README。每篇的代码引用(`classify.py:42`、`head.py:160`、`api.py:48`、`questions.py:38` 等)均相对**其对应仓库**的根目录,本仓库只留文档副本,不含任何源码。
 
-副本取自 ryotide 仓库 `docs/typed-decision-model.md`(分支 `docs`),该文仍在原仓库持续更新,需要同步时按此路径比对;本副本仅在文首多了一行代码库地址,比对时忽略该行即可。
+| 文档 | 上游代码库 | 副本来源 |
+|---|---|---|
+| `docs/ryotide/typed-decision-model.md` | [csabag/ryotide](https://github.com/csabag/ryotide) | 仓库 `docs/typed-decision-model.md`(分支 `docs`),上游仍在持续更新,同步时按此路径比对 |
+| `docs/jeff-serve/typed-decision-model.md` | [j-geuter/jeff-serve](https://github.com/j-geuter/jeff-serve) | 本地未提交稿,收录即移入本仓库 |
+| `docs/open-jev/typed-decision-model.md` | [Zefan-Cai/Open-Jev](https://github.com/Zefan-Cai/Open-Jev) | 本地未提交稿,收录即移入本仓库 |
+| `docs/quyet/typed-decision-model.md` | [ncchinh/quyet](https://github.com/ncchinh/quyet) | 本地未提交稿,原名 `docs/implementation.md`,收录时移入本仓库并改名为主题名 |
 
-核心立场浓缩成一句:同一个 KV cache 既能生成也能判类,区别只在**怎么读最后一个位置**。文中第 13 节列的四条不变量是踩坑总结——违反时数字会看似合理却是错的。
+四篇正文均未改动,只在文首补了代码库地址与「行号相对仓库根目录」的说明,并把指向 RYOTIDE 那篇的路径改写为本仓库内的相对路径。
+
+四条路线可以放在一起读,分歧集中在「读位置怎么定、置信度从哪来」:
+
+- **RYOTIDE**:零训练,把冻结 LLM 读成分类器——运行期标定读位置、掩码 + 重归一化,`marker_mass` 是它的诊断量;
+- **Jeff**:在 RYOTIDE 那条读法之上**训一个决策头**,`slice_init_` 让训练起点逐位等于零样本读法;
+- **Open-Jev**:把决策拆成 N 个 pointwise 的是非题,再训一个 `Yes − No` 播种的标量头读成校准打分;
+- **Quyet**:自训权重,encoder 用 `[MASK]` 槽位、LLM 用字母 `A..J`,温度随权重一起发布。
+
+共同底线只有一条,也是 RYOTIDE 第 13 节那四条不变量的来源:**一次前向、只读最后一个位置、掩码到已知标签集、重归一化,`output_tokens = 0`**。违反时数字会看似合理却是错的——四篇都在同一个主题上记录了各自的踩坑方式。
 
 ## 收录约定
 

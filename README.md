@@ -12,7 +12,9 @@
 
 ## 关于 `docs/ryotide/typed-decision-model.md`
 
-该文是对 RYOTIDE(`github.com/csabag/ryotide`)实现的逐文件说明,按 `src/ryotide/` 的实际代码组织。其中的代码引用(`classify.py:42`、`jevbench_adapter.py`、`bench/fit_temperature.py` 等)均指 RYOTIDE 仓库内的路径,本仓库只留文档副本,不含其源码。副本取自 ryotide 仓库 `docs/typed-decision-model.md`(分支 `docs`),该文仍在原仓库持续更新,需要同步时按此路径比对。
+该文是对 [RYOTIDE](https://github.com/csabag/ryotide) 实现的逐文件说明,按 `src/ryotide/` 的实际代码组织。其中的代码引用(`classify.py:42`、`jevbench_adapter.py`、`bench/fit_temperature.py` 等)均指该仓库根目录下的路径,本仓库只留文档副本,不含其源码。
+
+副本取自 ryotide 仓库 `docs/typed-decision-model.md`(分支 `docs`),该文仍在原仓库持续更新,需要同步时按此路径比对;本副本仅在文首多了一行代码库地址,比对时忽略该行即可。
 
 核心立场浓缩成一句:同一个 KV cache 既能生成也能判类,区别只在**怎么读最后一个位置**。文中第 13 节列的四条不变量是踩坑总结——违反时数字会看似合理却是错的。
 

@@ -1,7 +1,8 @@
 # RYOTIDE 是如何把本地 LLM“读”成类型化决策模型的
 
+> 代码库：<https://github.com/csabag/ryotide>
 > 对应 README 第 3 行：*Reading a local LLM as a typed decision model.*
-> 本文按 `src/ryotide/` 的实际代码逐环节说明这句话的实现方式。
+> 本文按 `src/ryotide/` 的实际代码逐环节说明这句话的实现方式；文中出现的文件名与行号（`classify.py:42`、`bench/fit_temperature.py` 等）均相对该仓库根目录。
 
 ## 0. 这句话的四个词分别落在代码的哪里
 

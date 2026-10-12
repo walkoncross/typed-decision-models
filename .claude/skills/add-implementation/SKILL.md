@@ -1,11 +1,11 @@
 ---
 name: add-implementation
-description: 往本仓库收录一篇新的实现调研文档时使用——读上游代码写走查正文、落位建档、在 README 登记、给 docs/comparison.md 加列、跑收录规范校验。当用户说「收录 xxx 的实现走查」「把 xxx 的文档加进来」「新增一个实现的调研文档」，或给出某仓库路径要求整理入库时触发。
+description: 往本仓库收录一篇新的实现调研文档时使用——读上游代码写走查正文、落位建档、在 README 登记、给 docs/comparison.md 加列、用 Hub 核对模型描述、跑收录规范校验。当用户说「收录 xxx 的实现走查」「把 xxx 的文档加进来」「新增一个实现的调研文档」,或给出某仓库路径要求整理入库时触发。
 ---
 
 # 收录一篇新的实现调研文档
 
-本仓库 `typed-decision-models` 按 `docs/<实现名>/` 收录各实现（RYOTIDE / Jeff / Open-Jev / Quyet）的逐环节走查。五步：**写作 → 落位 → 登记 → 加列 → 校验**。
+本仓库 `typed-decision-models` 按 `docs/<实现名>/` 收录各实现（RYOTIDE / Jeff / Open-Jev / Quyet）的逐环节走查。六步：**写作 → 落位 → 登记 → 加列 → 核对模型描述 → 校验**。
 
 ## 边界
 
@@ -136,7 +136,44 @@ description: 往本仓库收录一篇新的实现调研文档时使用——读�
 
 两侧的「四」都要改成实际数量——§1 的表头、开头的「四条路线」措辞、§4.4 的分类叙述都会随新增而失准。计数别按自己开始时的印象推：先 `grep` 出**当前**的数字（`九篇` / `十条` / `十路` / `第 N 路` 都散在标题、索引表、表格单元格与散文里）再改，改动时保留「另外十篇」「除 Kev 外的十条」这类**相对**表述。
 
-## 步骤 5：校验
+## 步骤 5：核对模型描述（以 Hub 为准）
+
+文档里凡涉及**模型**的陈述——基座是哪一档、参数量、权重体积、发布了哪些仓、钉的 revision——都在 `check.sh`
+的九项之外（它只查仓库内部的机械规范）。这部分必须单独核，事实来源是 Hugging Face 的 API 与模型仓文件：
+
+```bash
+# ① 从文档里抽候选仓名（纯正则，不联网）
+python3 .claude/skills/add-implementation/hf-model-facts.py repos docs/<实现名>/typed-decision-model.md
+
+# ② 逐个问 Hub：base_model / base_model_relation / 参数量 / 逐文件体积 / sha
+env HF_ENDPOINT=https://huggingface.co https_proxy=http://127.0.0.1:7890 \
+  python3 .claude/skills/add-implementation/hf-model-facts.py facts <repo> [<repo> ...]
+
+# ③ 要看某个小文件本身（模型卡、config、清单）
+env HF_ENDPOINT=https://huggingface.co https_proxy=http://127.0.0.1:7890 \
+  hf download <repo> --include "*.json" --include "*.md" --local-dir /tmp/<repo>
+```
+
+三个环境坑：①**本机 shell 里全局设着 `HF_ENDPOINT=https://hf-mirror.com`**，不覆盖就会去问镜像——镜像可能停在
+旧 revision，缺文件时抛 `LocalEntryNotFoundError`，看着像断网；②直连 `huggingface.co` 超时，必须走
+`127.0.0.1:7890`；③**只拉小文件**，`*.safetensors` / `*.gguf` 一个都不要下（核对容器算术时用 HTTP Range 取头部字节，
+或用 API 的逐文件 size）。
+
+| 类别 | 口径 |
+|---|---|
+| 基座 | 模型卡的 `base_model` / `base_model_relation`，**再**对训练代码或 `config.json` 里写的基座。`-it` / `-Base` / `-Instruct` 是**不同档**，不能省也不能互相代替 |
+| 参数量 | safetensors 元数据的 `total`（脚本已打印）；「参数量 ×2 = 权重文件字节」可用来反证是否 BF16 |
+| 体积 | 逐**权重文件**求和，与**整仓**字节数分开写；标明十进制 GB 还是 GiB（两者差约 7 %） |
+| 发布清单 | 把该作者的仓**枚举**一遍（`HfApi().list_models(author=...)`），别只核文档提到的那几个——漏掉的尺寸/量化档也是「模型描述不准确」 |
+| revision | 只认 API 给的 `sha`；镜像、tag 名、`main` 三者常常不是同一个 commit，清单里的 `revision` 与模型卡对得上的也可能是 `main` |
+
+两条约定：
+
+- **快照不进仓库**。现抓现核，抓下来的 json 放 `/tmp`——revision 会变，进仓库就是一份会过期却看着权威的数据。
+- **副本正文里核出的事实错误照改**。正文来自上游副本时（`README.md` 的收录约定要求逐字不动），这一处是例外：
+  把被证伪的数字/基座/体量改对并注明真值与来源。同步上游时它会显示为差异，这是预期，不是事故。
+
+## 步骤 6：校验
 
 ```bash
 .claude/skills/add-implementation/check.sh

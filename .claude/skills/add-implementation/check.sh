@@ -83,11 +83,12 @@ for d in docs/*/; do
   if grep -qF "$impl/" docs/comparison.md; then ok "$impl"; else bad "comparison.md 未覆盖 $impl"; fi
 done
 
-echo "== 9. 代码库地址与 README 一致 =="
+echo "== 9. 代码库地址与 README 一致（GitHub 或 Hugging Face 仓库）=="
 while IFS= read -r f; do
   url=$(grep -m1 -oE '^> 代码库：<[^>]*>' "$f" | sed -E 's/.*<([^>]*)>/\1/')
   if [ -z "$url" ]; then bad "$f 取不到 URL"; continue; fi
-  rurl=$(grep -F "$f" README.md | grep -oE 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' | head -1)
+  # 上游不一定是 GitHub：Hugging Face 的模型仓也带代码（见 docs/openjev-hf/）。
+  rurl=$(grep -F "$f" README.md | grep -oE 'https://(github\.com|huggingface\.co)/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' | head -1)
   if [ "$url" = "$rurl" ]; then ok "$f  $url"; else bad "$f 文首=$url  README=$rurl"; fi
 done < <(impl_docs)
 

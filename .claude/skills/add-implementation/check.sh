@@ -31,7 +31,9 @@ while IFS= read -r f; do
   base=$(basename "$f"); impl=$(basename "$(dirname "$f")")
   if printf '%s' "$base" | grep -qiE '^(implementation|impl|index|doc|docs|document|readme|notes|misc)\.md$'; then
     bad "$f 文件名过于泛化（应写主题名，如 typed-decision-model.md）"
-  elif printf '%s' "$base" | grep -qi -- "$impl"; then
+  elif printf '%s' "$base" | grep -qiE "(^|[^[:alnum:]])${impl}([^[:alnum:]]|\$)"; then
+    # 词界匹配，不是子串匹配：实现名 decisio 是主题名里 decision 的前缀，
+    # 子串匹配会把 docs/decisio/typed-decision-model.md 误判成「文件名重复了实现名」。
     bad "$f 文件名重复了实现名（${impl}）"
   else
     ok "$f"

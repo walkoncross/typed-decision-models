@@ -94,6 +94,47 @@ while IFS= read -r f; do
   if [ "$url" = "$rurl" ]; then ok "$f  $url"; else bad "$f 文首=$url  README=$rurl"; fi
 done < <(impl_docs)
 
+echo "== 10. 表格完整性（裸竖线撑列 / 空行断表）=="
+# 两种写法都只错位、不报错，渲染看不出来也读不出来，只能机械地查：
+#   ① 单元格里的裸竖线（token 串 <|name|>、<|im_start|>，或 |Δ| 这类绝对差）没转义成 \|，
+#      会把那一行撑多一列——表头（后跟分隔行）定了列数，同表其余行必须与它相等，\| 不计；
+#   ② 表格中间插了空行，表被断成两块，后面那些行会渲染成正文（竖线原样显示）——
+#      判据是「以 | 开头、没有表头、也不紧跟在表格行后面」的孤立块。
+tbl_bad=$(while IFS= read -r f; do
+  awk -v file="$f" '
+    function npipe(s,   i, c, prev, n) {
+      n = 0; prev = ""
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "|" && prev != "\\") n++
+        prev = c
+      }
+      return n
+    }
+    { L[NR] = $0 }
+    END {
+      i = 1
+      while (i <= NR) {
+        if (L[i] ~ /^\|/) {
+          if (i + 1 <= NR && L[i+1] ~ /^\|[-: |]+\|[ \t]*$/) {
+            # 表头 + 分隔行 = 一张表；同表其余行必须与表头列数相等
+            hdr = npipe(L[i]); i += 2
+            while (i <= NR && L[i] ~ /^\|/) {
+              if (npipe(L[i]) != hdr) printf "%s:%d 列数 %d != 表头 %d（裸竖线）\n", file, i, npipe(L[i]), hdr
+              i++
+            }
+          } else if (i == 1 || L[i-1] !~ /^\|/) {
+            # 没有表头的孤立 | 行：多是表格中间被插了空行，后面的行会渲染成正文
+            printf "%s:%d 表格被空行断开（表头不在这一块里）\n", file, i
+            i++
+          } else i++
+        } else i++
+      }
+    }
+  ' "$f"
+done < <(find docs -name '*.md'; echo README.md) | sort)
+if [ -z "$tbl_bad" ]; then ok "全部表格完整"; else bad "表格错位（裸竖线转义成 \\|；被空行断开的表把行接回去）："; printf '%s\n' "$tbl_bad" | sed 's/^/        /'; fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "全部通过。"; else echo "有 FAIL，见上。"; fi
 exit "$fail"

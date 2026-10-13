@@ -694,7 +694,6 @@ Python 字面量写成文本」（`shim.py:186`、`serve/SERVE.md:66`）。但 `
 | **#1** 读位置必须落在标记上（诊断量 `marker_mass`） | **结构性成立，但没有诊断量**。位置由微调固定（`README.md:191`），运行期不扫、也不上报落在哪。代码里唯一相关的东西是 `assert len(set(allowed)) == len(allowed)`（`shim.py:150`）——那是**槽位唯一性**自检，不是位置诊断。防线是每一处调用都传 `enable_thinking: False`（§3），而模型的 chat 模板在不传时默认开 `xhigh` 推理 |
 | **#2** 前缀与标记表面形式耦合，必须成对扫 | **不适用**：没有 `SUFFIXES`/`PATTERNS` 这个概念，标记是 token id（`letter_ids()`，`shim.py:25-30`）不是字符串表面形式。但它有一个同类的耦合：**字母 token 与分词器绑定**，所以 `TOKENIZER` 既决定读哪个 id、又决定 `/v1/version` 报什么名字（§13.2），换成另一个分词器就要整条重来 |
 | **#3** 只读最后一个位置 | **改写**：读的是**第一个输出位置**（`max_tokens=1`，`shim.py:151,157`），不是输入的末位。这是这条路线与 RYOTIDE 最本质的一处不同——RYOTIDE 读 prompt 末尾那一步的分布，这里读「生成第一个 token 时」的分布，两者在因果 LM 里是同一个位置，但**这条路线是靠微调把语义搬到那个位置上的**。同时「不物化 `[1, n_tokens, vocab]`」不适用：词表维度由 vLLM 内部处理，补丁只拿 top-K 或指定 id 的分 |
-
 | **#4** 比较概率 / ECE 前先确认 temperature | **成立，且比别家更硬**：T、noul 两个常数、**全部 flag**、补丁文件的 sha256 都在 `GET /v1/version` 里（`shim.py:339-346`），并且**每一条回答的 `model` 字段自带同一串摘要**（`shim.py:347-348`）。前提是调用方真的去读它——`serve/SERVE.md:167` 提示 *use it to pin what you measured* |
 | （新增）**`output_tokens = 0`** | **不成立**：对 vLLM 发的是 `max_tokens: 1`（`shim.py:151,157`），确实采了一个 token；响应里的 `"output_tokens": 0` 是**硬编码的**（`shim.py:325`）。读的不是那个 token，但「零输出 token」这句话在这条路径上是**自报值，不是事实** |
 | （新增）**发布的常数必须与发布的读数配对** | **代码默认值不等于发布值**：三个数值常数（T、noul 斜率、noul 偏置）与两个行为开关（`READOUT_TARGETED`、`READOUT_INSTR_STYLE`）的默认值与发布值全都不同（§13.2）。而且 T 与 noul 斜率是**在 TARGETED 打开时拟合的**，混用即为错配（`serve/SERVE.md:65`） |

@@ -16,6 +16,8 @@ LLM「读」成分类器**，这篇讲的是**如何在那次「读」之上训�
 | 代码引用 | `src/jeff/**`（本仓） | `文件:行` |
 | 由实跑得到的产物 | `prompting.py` 与 `typesafe.py` 是**纯 Python**（只依赖 `hashlib/json/os/string/weakref/math`），可用 `importlib` 按路径加载、**不加载 torch、不加载模型**即可执行 | 标注「实测」 |
 | 公式与常量 | README、模型卡 | `README:行` |
+| 推断 | 由张量形状、算子代数或初始化语义推出，**仓里没有对应注释可引** | 标注「推断」 |
+| 发布产物 | 模型仓 `jgeuter/Jeff-1.0-Large`（revision `275325a5eab52cce4f109a09ee3832f2eb89fe2f`）的 `head_config.json`、`jeff_config.json`、`serving_rule.json` 与模型卡；经 Hugging Face API 读取 | 标注「模型仓:文件」 |
 
 **没有跑模型前向**（权重约 61 GB，本机未下载）。所以本文**不给出任何前向产生的概率数值**；
 所有「实测」都是不依赖权重的部分：prompt 的字节内容、选项到标记的映射、标签表、serving rule 的算术。
@@ -205,6 +207,21 @@ RYOTIDE 是运行期按标签集解析并给出换词建议，Jeff 是**编译�
 | `typed-residual` | 同 `residual`，但 `delta` 输出 `3 × k_slots`，按问题类型 `q` 取一份 | 同上 | — |
 | `typed-regression` | `residual` + `score_regression`，对归一化 level 做高斯 `center/spread` | `spread ≈ 0.20` | — |
 
+上表里唯一一个**发布路径上不存在的输入**是 `extra`，它的定义：
+
+- **是什么**：同一位置（最后一个 prompt token）上**更早若干层**的隐状态，按层序拼接、展平成
+  `[B, n_layers × d_model]`——docstring 原话 *hidden states of earlier layers at the same position*
+  （`head.py:11-13`）。层号由构造参数 `extra_layers` 给出、宽度由 `extra_dim` 声明（`head.py:61`、`:70-71`），
+  两者都进 checkpoint 的 config（`head.py:221`），宽度对不上时 `_check_extra` 直接报错（`head.py:149-151`）。
+- **怎么进公式**：`linear` 只对它做标准化（权重 `W_x` 零初始化、无 bias，`head.py:80-81`、`:168-169`）；
+  `residual` 系列把它与 `h` **拼接后一起**标准化再过 `delta`（`head.py:133`），所以 `extra_dim=0` 时
+  `std([h, extra])` 就是 `std(h)`，上表两种写法是同一件事；标准化统计量也随之是 `d_model + extra_dim` 宽
+  （`head.py:103-104`）。`temperature` 的 `u` 在它之外还多三个零样本统计量（见本节第 2 条须知）。
+- **发布路径上等于关闭**：构造默认 `extra_dim=0`，`model.py:98` 也只传 `h, k`——若发布的头真要求 `extra`，
+  这条调用会在 `_check_extra` 抛错。**已在模型仓核实**：`head_config.json`（revision `275325a5…`）给出
+  `extra_dim: 0`、`extra_layers: []`，即上表的 `extra` 项在 `Jeff-1.0-Large` 上确实不存在。docstring 指路的
+  收集代码 `features.py` **在本仓全部历史里都不存在**（`git log --all` 无此路径）。
+
 ### `README:15` 的公式：逐符号对照
 
 `README:15` 印的公式正是 `residual` 这一行——§4 讲 `h` 从哪来，§5 讲 `z` 怎么变成 `p`：
@@ -232,10 +249,26 @@ z = c·tanh(W0 h / c) + A·std(h) + b,     p = softmax(z_1, …, z_K)      # REA
 
 1. **softcap 只包住第一项**。代码是先 `_cap(W0 h)`、再 `+ delta`（`head.py:173` → `:182`），修正项不过
    tanh；README 的括号范围与之一致，下面的逐点说明里有它为什么不能漏。
+
+   **为什么不把修正项的输入也换成 `_cap(W0 h)`**（紧邻 cap 边界最近的一个自然设想）：一是维度——它只有
+   `K` 维，且只是 `h` 在 `W0` 那 K 行张成空间上的投影，正交补整块丢弃，`A` 会退化成「对零样本 logit 的
+   再映射」；`h` 是 d_model 维的完整残差流读数。二是 cap 有损——`|z| ≳ c` 处梯度趋 0，越自信越不可分，
+   与「修正零样本误判」的动机相反，而 `h` 没经过这一步压缩。三是硬约束——`z0` 已被 `masked_fill(-inf)`
+   （`head.py:174`），整条向量喂 MLP 会传播 Inf/NaN；仓里唯一读 cap 后数值的 `logit_stats` 正是绕开它：
+   先 `softmax(z0)` 把 `-inf` 变 0，再只取三个标量（`head.py:136-143`，仅 temperature kind 启用，`:72`）。
+   反例排除：`linear` 把 cap 包在**整项**外（`head.py:166-170`）、`residual` 只包第一项，边界确实逐 kind
+   定过，但两种 kind 都没把 cap 后的值当输入。另：「t=0 逐位等于零样本」**不能**用来论证这个选择——`A = b = 0`
+   时输入是什么修正项都是 0；选 `h` 的真实代价是自由度更大、更易偏离零样本，这也正是 `residual` 的 weight
+   decay 拉向零样本读数（而非 `linear` 那样拉向均匀分布）的来由（`head.py:20-22`）。
+
+   **推断**（非代码引用，仓里无注释，由形状与仿射等式推出）：输入若改用 softcap **之前**的 `W0 h`，因
+   `std` 是仿射的，头会塌缩成 `M·(W0 h) + b`（`M` 为 K×K），即修正项只能重加权零样本的 K 个 logit——这
+   正是 `linear`（允许吸收）与 `residual`（不许）的分野；对 cap **之后**的输入不成立（`tanh` 挡在中间）。
 2. **`A·std(h)` 是简写**。喂给 `delta` 的实际输入是 `u = _std(h, extra)`：若开了 `extra`（早期层隐状态，
    `extra_dim=0` 时关闭）还要拼上它；`temperature` kind 的 `u` 另加三个零样本统计量（最大概率、
    归一化熵、`log k`，`head.py:136-143`，且只在 temperature 下启用，`head.py:72`）。对发布用的
-   `residual`，`u` 恰好就是 `std(h)`。
+   `residual`，`u` 恰好就是 `std(h)`。两条关于 `extra` 的事实：发布路径从不传它（`model.py:98` 只传
+   `h, k`），而 docstring 引用的 `features.py` **在本仓全部历史里都不存在**（`git log --all` 无此路径）。
 3. **`c` 在这一节的另一处公式里是另一个东西**：`temperature` kind 的 `T = t_min + softplus(a·u + c)`
    里那个 `c` 是 `temp.bias`（加性偏置），与 softcap 无关。
 4. **公式里的 `A` 与标签 `A` 无关**。`LABELS[0]` 就是字母 `A`，它恰好是 `W0` 的第 0 行；矩阵 `A` 只是
@@ -252,6 +285,12 @@ z = c·tanh(W0 h / c) + A·std(h) + b,     p = softmax(z_1, …, z_K)      # REA
   Qwen 系无此常量，`softcap=None` 退化为恒等（`head.py:223` 连 config 都只在有 softcap 时才写）。
 - **`_std()` 是逐维 z-score**（`head.py:132-134`），`mu`/`sigma` 在**训练集**上算好、存进
   checkpoint（`set_standardization`，`head.py:120-125`），所以头对 hidden state 的尺度不敏感。
+  **为什么非要有这一步**：`W0 h` 是冻结的**加性**项，修正只能往上加，`A` 因此是同一个矩阵在每条输入上
+  复用——不标准化的话，同一个 `A` 产生的增量会整体正比于该条 `h` 的尺度，`A` 学到的含义随输入漂移，
+  各行的量级也没有统一刻度。与 `linear` 的对照正说明这是 `residual` 形式的代价：那里 `W` 自由可学、
+  能自己吸收尺度，所以只标准化 `extra`（`head.py:168`）；这里 `W0` 冻结、修正只能加，才必须把输入摆到
+  固定刻度上。同一组对照也体现在 weight decay 的语义上（`head.py:17-22`）：`linear` 拉向均匀分布，
+  `residual` 拉向零样本读数。
 - **`temperature` kind 按构造不改 argmax**（`head.py:191`）：`T(u) > 0` 恒成立，除以正数只改分布的
   陡峭程度。docstring 原话：*decisions (and accuracy) are always those of the zero-shot model;
   only the confidence is learned*。这是 RYOTIDE §9.2 那条立场的**可训练版本**：RYOTIDE 的 `T` 是离线
@@ -279,8 +318,9 @@ if q is None:
 
 而 `Decider.decide`（`model.py:98`）调用 `option_logits(h, k)` 时**从不传 `q`**。所以
 
-- `Jeff-1.0-Large` 发布的头必然是 `linear` / `residual` / `temperature` 之一，与 `README:15` 的公式
-  对应即 `residual`；
+- `Jeff-1.0-Large` 发布的头必然是 `linear` / `residual` / `temperature` 之一；模型仓的 `head_config.json` 给出
+  `kind: "residual"`（同处还有 `k_slots: 16`、`softcap: 30.0`、`logit_stats: false`、`t_min: 0.05`），
+  与 `README:15` 的公式一致；
 - `q` 的取值约定（代码里只有 `q == 2` 走 score 分支，`head.py:189`）属于**训练侧**，不在这份 serving
   代码里，本文不推测。
 
@@ -409,13 +449,16 @@ Jeff **不生成任何 token**：`usage.output_tokens` 在代码里是**硬编�
 | 环节 | 代码 | 改发布概率的数值？ | 改 argmax？ | 发布 preset 里生效？ |
 |---|---|---|---|---|
 | 训练决策头（含 `residual` 的 A、b） | `head.py`（训练侧） | **是** | **是** | 是（baked in 权重） |
-| `temperature` kind：学出的逐输入 `T(u)` | `head.py:191` | 是 | **否，按构造** | 取决于发布头是否选它 |
-| serving rule：逐类型 temperature | `typesafe.py:99-104`、`:88-89` | 是 | 否 | 是（若 `serving_rule.json` 配了） |
-| serving rule：`noul_edge` 带内推移 | `typesafe.py:92-96` | 是 | 否 | 是（若配了） |
+| `temperature` kind：学出的逐输入 `T(u)` | `head.py:191` | 是 | **否，按构造** | **否**：发布的头是 `residual`（模型仓:`head_config.json`） |
+| serving rule：逐类型 temperature | `typesafe.py:99-104`、`:88-89` | 是 | 否 | **是**：`choice_t` 1.5204、`noul_t` 1.3133、`score_t` 1.3133 |
+| serving rule：`noul_edge` 带内推移 | `typesafe.py:92-96` | 是 | 否 | **是**：`noul_edge` 0.0（margin 为零，见 §9.2） |
 
 与 RYOTIDE §9.0 的表对照：RYOTIDE 那一列「发布出去的概率数值只被 temperature 改变」，因为它零参数、
 纯读；Jeff 多了一行**训练本身**——头的 A、b 是学出来的，它既改数值也可能改 argmax（这是「训练」相对
-「读」的必然代价，也是换来的精度）。**训练之后**，能再动发布数值的只有 serving rule 的两项。
+「读」的必然代价，也是换来的精度）。**训练之后**，能再动发布数值的只有 serving rule 的两项，而这两项在
+发布 preset 里**都实际生效**（四个值见上表，模型仓:`serving_rule.json`）：代码判定生效的条件是 `T != 1.0`
+与 `noul_edge is not None`（`typesafe.py:110`、`:115`、`:117`、`:120`），发布的三个 T 都不是 1、`noul_edge`
+也不是 `None`。
 
 ### 9.1 serving rule 的 temperature 与 RYOTIDE 是同一个式子
 
@@ -454,7 +497,9 @@ T=0.5 时最高项从 0.55 升到 0.8075，T=4 时降到 0.2819；预测标签�
 
 对照 RYOTIDE 的机制差异：RYOTIDE 的 T 是 **preset 里钉死的常量**（Gemma 1.924 / Qwen9 0.667 /
 Qwen3.5-4B 拟合出 1.592 但留出集变差被拒，保持 1.0），由 `bench/fit_temperature.py` 离线拟合。
-Jeff 的 T 是**配置**（`serving_rule.json`），且另有一条**逐输入学习**的版本（`temperature` kind）。
+Jeff 的 T 是**配置**（`serving_rule.json`），且另有一条**逐输入学习**的版本（`temperature` kind）。发布 preset
+里的三个值是 `choice_t` 1.5204、`noul_t` 1.3133、`score_t` 1.3133（模型仓:`serving_rule.json`）——**都 ≥ 1**，
+即发布出去的是比原始 softmax **更平**的分布；模型卡的说法是 *fitted on our own validation data, never below 1*。
 
 ### 9.2 `noul_edge`：比 temperature 更硬的一处改写
 
@@ -491,6 +536,12 @@ def noul_edge(p, margin=0.0):
   要比较就必须先确认两侧用的是同一套 `serving_rule`。这是 §13 不变量 #4 在 Jeff 里的加强版——
   RYOTIDE 只提醒「先确认 temperature」，Jeff 还要多确认一项 `noul_edge`。
 
+**发布用的正是 `margin=0.0`**（模型仓:`serving_rule.json`），所以上表 `margin=0.0` 那一列就是实际行为：
+凡落在 (0.2, 0.8) 内且不等于 0.5 的 P(yes) 都会被推到 0.801 / 0.199。模型卡用文字写了同一条：
+*moves yes/no answers with 0.2 < P(yes) < 0.8 to just outside the nearer edge (0.801 or 0.199)*。
+注意「配了 0.0」与「没配」不是一回事：`noul_edge` 缺失（`None`）时这一步整步恒等，取 0.0 时照常施加
+（`typesafe.py:117`）。
+
 `apply_rule` 的施加顺序是 **先 temperature、后 edge**（`typesafe.py:113-119`）。**实测**（`rule =
 {noul_t:1.5, noul_edge:0.15, score_t:0.8, choice_t:1.2}`）：
 
@@ -515,7 +566,10 @@ no rule : {'yes': 0.62, 'no': 0.38}            # 每一项缺失即恒等
   `/health`。没有 `prompt_hash` 字段；**配置指纹以另一套形式暴露**：响应的 `runtime` 里带
   `readout`、`probability_origin`、`serving_rule`（`serve.py:82-84`）。
 - **`serving_rule` 走 `runtime` 而非响应顶层**：`rule` 在启动时从 `serving_rule.json` 读入
-  （`model.py:125`），也可由 `JeffModel(rule=...)` 覆盖。
+  （`model.py:125`），也可由 `JeffModel(rule=...)` 覆盖。发布那一份**四项俱全**——`choice_t` 1.5204、
+  `noul_t` 1.3133、`score_t` 1.3133、`noul_edge` 0.0（模型仓:`serving_rule.json`）；其中 `noul_edge: 0.0` 是
+  **配了但 margin 为零**，不是缺失：缺失时该步恒等，取 0.0 时落在 (0.2, 0.8) 的 P(yes) 会被推到 0.801 / 0.199
+  （§9.2）。所以第 15 节那句「`runtime.serving_rule` 是实际生效的 rule」在发布 preset 上不是空话。
 - **`usage.input_tokens` 是逐题累加的和**，`output_tokens` 恒为 0（`serve.py:60`）；
   `runtime.forward_seconds` 是各题前向耗时之和。
 - **错误 → HTTP 422**，只捕获 `KeyError/TypeError/ValueError`（`serve.py:57-58`），把异常类型与消息
@@ -737,7 +791,7 @@ Options（实际是 JSON 的 options 数组，此处按渲染后的形态列出�
 | **#1** 读位置必须落在标记上（诊断量 `marker_mass`） | 头的数据已指向标记槽位；其余槽位 `-inf` | 结构性成立，但**无诊断量**（§5）。`runtime` 里没有类似 `marker_mass` 的健康指标 |
 | **#2** 前缀与标记表面形式耦合，必须成对扫 | prompt 格式与头**一起被冻结**，无运行期探测 | 成立，且被训练固化；代价是不能换格式（§4） |
 | **#3** 只读最后一个位置 | `.last_hidden_state[:, -1]` | 成立，且更彻底（连 vocab 维度都不物化） |
-| **#4** 比较概率或 ECE 之前，先确认 temperature | `runtime.serving_rule` 回传；且**多一项 `noul_edge`** | 成立，且**有两处**改写（§9）；`noul_edge` 还会破坏单调性 |
+| **#4** 比较概率或 ECE 之前，先确认 temperature | `runtime.serving_rule` 回传；且**多一项 `noul_edge`** | 成立，且**有两处**改写（§9）——发布 preset 上两处**都实际生效**（1.5204 / 1.3133 / 1.3133 / 0.0）；`noul_edge` 还会破坏单调性 |
 | （新增，训练侧） | **单 token 标签表与分词器绑定** | 换分词器必须重标 `_NOT_ONE_TOKEN` 与 `slot_ids` |
 
 ---

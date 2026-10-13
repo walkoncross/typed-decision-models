@@ -775,6 +775,16 @@ JevBench 那一侧：231 = 48（easy）+ 72（original）+ 111（hard），三�
    不带鉴权查询返回 `RepositoryNotFoundError`。**私有还是已删除，本文未核实**；
    引用 `results/decision-evaluation-v1` 与 `results/release-v0.2.json` 里那些数字时，
    它们指向的权重**今天无法从 Hub 取回**。
+5. **五份清单各自钉了基座 revision，与 Hub 上这四个基座当前的 sha 逐个相同**（**实测（Hub）**）：
+   `google/gemma-4-E4B-it` = `ee0ef6023621cff504d758262d4e04895a5af4a2`、`Qwen/Qwen3.5-4B` =
+   `851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`、`Qwen/Qwen3.8-27B` =
+   `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0`、`meta-models/Muse-Glimmer-30B` =
+   `a4e59da52a7bc87ae7251dd5545c0dd437c44b68`。发布文件集本身也对过一遍：在
+   `SimpleJev/JevAny-Qwen3.8-27B-LoRA@09c9e910…` 上取回 `chat_template.jinja`（8,952 B），
+   sha256 = `c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041`，与 §13.3 表里
+   `release-manifest.json` 记的那个值一致；该清单自己记的 `adapter_config.json`（`31d8e262…`，
+   取回后逐字节相符）、`adapter_model.safetensors`（`f4b835f4…`）与 `head.pt`（`f78fa283…`）
+   也都在同一份发布里（只取小文件，**没有下载任何权重**）。
 
 ---
 

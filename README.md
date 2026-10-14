@@ -29,6 +29,21 @@
 | JevAny | [`docs/jevany/typed-decision-model.md`](docs/jevany/typed-decision-model.md) | 逐环节实现走查:15 节,从"同一个运行时里并存**两条读法**——检查点自带的头(pointer 的 q·k,或 direct-token 直接读 `lm_head` 的 255 行)与零训练、只读 52 个单字符 ID 的 `choice`""一次前向读构造出来的两个位置,而「掩码 + 重归一化」在两条链上分别是**概念不适用**与「落在**标签**上」"到"发布出去的每一个概率、每一个 `confidence` 都被 `round(x, 2)`"与"四个 pointer 检查点的 `head.pt` 字节数在三个不同 hidden size(2560 / 5120 / 6656,两个仓共用 2560)上逐字节闭合",含三套标签集、一个构造性不变的 `option_isolation` 开关、agent 循环与确定性日期预处理两处新增维度、四条不变量的落位,以及在 committed 产物上的复算(McNemar 精确检验与延迟比逐位复现、Cygnet 复合分按四轴调和平均重算、发布清单与 v1 读数三处 sha256 互证) |
 | 跨实现对照 | [`docs/comparison.md`](docs/comparison.md) | 十九路总表:主对照表、JevBench 看板给的架构分类与十九条的对应(§1.1)、谁在改发布数值、四条不变量的跨篇落位、同一坑的各家修法、数字可比较性口径。只做索引与总表,论证仍在各篇 |
 
+## 外部基准
+
+本仓自己的数字只到「在 committed 产物上能复算的那一层」,**不出分数、不做排名**([`comparison.md`](docs/comparison.md) §5)。要查某个模型在这类基准上考了多少分,去外部页面看。链接索引单独收在 [`docs/jev-benchmarks.md`](docs/jev-benchmarks.md),只记页面标题与自述,不复制数字:
+
+| 名称 | 链接 | 是什么 |
+|---|---|---|
+| JevBench | <https://jevbench.github.io/> | 基准本体:一致性测试(不是准确率、不是速度),50 条定律分五维 REP / BAT / MEA / LOG / CHO,0.05 通过线 |
+| JevBench 看板 | <https://benchmarkheaven.com/jev-models> | 第三方看板,**本仓 `comparison.md` §1.1 的架构分类就取自它的 `/all` 视图** |
+| Decision Model Leaderboard | <https://clef-evals.workers-ai-mle.workers.dev/> | 社区 Decision Index 榜,含 Cloudflare Clef;页面把 Decision Index 与 median latency 并置 |
+| Jev Decision Index | <https://huggingface.co/spaces/multimodalart/jev-decision-index> | Hugging Face Space:给 Jev 的**开源复现**排名,数据分公开基准 / 私有测试 / 新领域任务三类 |
+| Open-Jev benchmarks | <https://zefan-cai.github.io/open-jev/benchmarks/> | **走查对象自己出的**结果页(JevBench & JF100、TREC 检索、延迟、留出),逐表保留自己的指标与分母 |
+| Microsoft-Decision-1 | <https://commandline.microsoft.com/microsoft-decision-1-model-foundry/> | 厂商发布文(决策打分模型),文内日期 2026.10.09 |
+
+三条抓取注意:`benchmarkheaven` 要带代理(`--proxy 127.0.0.1:7890 -k`,类别写在 tooltip 标题里而不是单元格文本里);huggingface.co 在本机直连超时,同样走代理;`clef-evals` 那条是 SPA,内容不在 HTML 里,直接抓只能拿到 meta。
+
 ## 关于各篇文档
 
 十九篇都是从**只读代码**出发写的实现走查,不是复述 README。每篇的代码引用(`classify.py:42`、`head.py:160`、`api.py:48`、`questions.py:38`、`common.py:634` 等)均相对**其对应仓库**的根目录,本仓库只留文档副本,不含任何源码。
@@ -88,6 +103,8 @@
 新增实现或案例时,在 `docs/<实现名>/` 下建目录,一事一文,并在上表登记一行。同一实现的文档放在同一子目录里,文件名直接写主题(如 `typed-decision-model.md`、`calibration.md`),不再重复实现名。
 
 跨实现的总表放 `docs/` 顶层(如 `docs/comparison.md`),不进任何单个实现的子目录——它不属于某一个实现,且这样各篇更新时顶层只需改表格格子。总表定位为**索引**,不复制各篇的论证,需要论证的地方链回原文。
+
+**外部基准与看板**的链接同样放 `docs/` 顶层,统一收在 [`docs/jev-benchmarks.md`](docs/jev-benchmarks.md):新增一条时在那里加一行(标题与自述取自页面自身,并记核验日期),README「外部基准」一节同步加一行。这类页面**不是实现**,不进上面的目录表;它们的分数据本仓一律不复制、不汇总、不跨页对比。
 
 正文取自上游的副本保持逐字不动,改动只限文首的代码库地址、行号基准说明和库内相对链接,以便按路径与上游比对;**例外是核出的事实错误**——副本正文里被证伪的数字、基座档位、体量照改,并注明真值与来源,同步上游时这一处会显示为差异,属预期。代码引用带文件名与行号,概率、准确率一类的数字标注来源 run 与 temperature。
 

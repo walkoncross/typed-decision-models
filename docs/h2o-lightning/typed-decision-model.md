@@ -497,7 +497,7 @@ RYOTIDE 第 13 节那四条，在这条链上的状态：
 |---|---:|---|
 | `h2o_lightning_shim.py` | 1,176 | 全部实现：prompt 构造、标签探针、vLLM 客户端、温度、地板、置信度、HTTP 服务、图像路径、URL 抓取 |
 | `serve_config.json` | 23 | 发布配置：模型名、三个题型温度、`noul_floor`、prompt 布局、255 个标签、`max_options`、图像块 |
-| `chat_template.jinja` | 153 | Qwen3.5 的 chat 模板（随权重仓发布；shim 只用来比对，不直接渲染——文本路径渲染的是 :73-75 的硬编码等价物） |
+| `chat_template.jinja` | 153 | `Qwen/Qwen3.5-4B` 的 chat 模板（随权重仓发布；shim 只用来比对，不直接渲染——文本路径渲染的是 :73-75 的硬编码等价物） |
 | `serve.sh` | 30 | `vllm serve` + shim 一起拉起；`VLLM_USE_FLASHINFER_SAMPLER=0` 的原因写在 :17-18 |
 | `test_shim.py` | 514 | 无 GPU、无网络的测试：prompt 形状、温度、地板、分数、多问题共享、分块、截断、标签校验、状态码、图像路径 |
 | `test_security.py` | 206 | 图像 URL 抓取的 SSRF 边界测试（10 例） |

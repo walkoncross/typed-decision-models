@@ -48,7 +48,7 @@ decider 的读法在结构上**最接近 RYOTIDE**：把冻结或微调过的 LL
 
 | 维度 | RYOTIDE | decider |
 |---|---|---|
-| **权重来源** | 公开 LLM，全程 frozen | **两种**：自训（Qwen3.5-0.8B/2B/4B/35B-A3B-**Base** 微调；12B 是 Gemma-4-12B-it + 合并 LoRA；31B 是 Gemma-4-31B-it 合并微调后量化到 NVFP4，`Mapika/decider-31b`；另有 `Mapika/decider-2b-vision`，是同一个 2B 的**视觉语言版**——`MODEL_CARD_VISION.md:88` 记的做法是把 v5 的文本权重移植进完整的 Qwen3.5-2B 视觉语言模型，在游戏帧 + Cauldron 选择题上训一轮、再对 Breakout / Pong 做 **PPO from pixels**，Hub 上 2,213,241,664 参数 / `model.safetensors` 4,426,558,864 B）**与**不改权重、只用 `decider_config.json` 读进来的 stock 指令模型（`decider-chat-gemma4-31b`、`decider-chat-qwen3.6-27b`）（§8） |
+| **权重来源** | 公开 LLM，全程 frozen | **两种**：自训（`Qwen/Qwen3.5-0.8B-Base` / `-2B-Base` / `-4B-Base` / `-35B-A3B-Base` 微调；12B 是 `google/gemma-4-12B-it` + 合并 LoRA；31B 是 `google/gemma-4-31B-it` 合并微调后量化到 NVFP4，`Mapika/decider-31b`；另有 `Mapika/decider-2b-vision`，是同一个 2B 的**视觉语言版**——`MODEL_CARD_VISION.md:88` 记的做法是把 v5 的文本权重移植进完整的 `Qwen/Qwen3.5-2B` 视觉语言模型，在游戏帧 + Cauldron 选择题上训一轮、再对 Breakout / Pong 做 **PPO from pixels**，Hub 上 2,213,241,664 参数 / `model.safetensors` 4,426,558,864 B）**与**不改权重、只用 `decider_config.json` 读进来的 stock 指令模型（`decider-chat-gemma4-31b`、`decider-chat-qwen3.6-27b`）（§8） |
 | **是否训练** | 否，零新增参数 | **两边都有**：自训 checkpoint 训**全部参数**（含 `lm_head`，`train.py:95`）；stock 路径零训练。它自己把后者归为「inference techniques」（`README:137`） |
 | **决策机制** | 读**标签 token** 的 logits → 掩码 → softmax | 读 `Answer k: (` 槽位的 hidden state → 用 `lm_head` 的标签行投影 → 掩码 → `softmax(logits / T)`（`model.py:28-31`）；**字母从不生成**，K 个槽位同一次前向 |
 | **「typed」从哪来** | 分词器：标签必须单 token，否则映射成字母标记 | 分词器：**255 个单 token 标签**（`A`–`J` + `A`–`Z` + 229 个双字母），由 `label_table` 断言「恰好 255 个互不相同的 id」（`prompt.py:52`）；请求侧再限 2–255（`systemone.py:56-57`）（§2） |
@@ -474,8 +474,8 @@ def loss_fn(logits, golds, nopts, brier_w=0.0, label_smooth=0.0):
 
 | 模型 | base | 它带的东西 | 文档数值 |
 |---|---|---|---|
-| `decider-chat-gemma4-31b` | Gemma-4-31B-it，权重未改 | `temperature_by_options: {"a": 10.124, "b": -1.633, "min": 0.05}` → `T(n) = max(0.05, 10.124 − 1.633 ln n)` | Decision Index v0.2.1 **57.33，第 2/70**，ECE 0.047（`README:169`、`:130`） |
-| `decider-chat-qwen3.6-27b` | Qwen3.6-27B，权重未改 | 单一温度 **1.943** | Decision Index 51.35，第 8/70，ECE 0.021（`README:170`、`:132`） |
+| `decider-chat-gemma4-31b` | `google/gemma-4-31B-it`，权重未改 | `temperature_by_options: {"a": 10.124, "b": -1.633, "min": 0.05}` → `T(n) = max(0.05, 10.124 − 1.633 ln n)` | Decision Index v0.2.1 **57.33，第 2/70**，ECE 0.047（`README:169`、`:130`） |
+| `decider-chat-qwen3.6-27b` | `Qwen/Qwen3.6-27B`，权重未改 | 单一温度 **1.943** | Decision Index 51.35，第 8/70，ECE 0.021（`README:170`、`:132`） |
 
 `README:137-139` 自己点出了这件事的含义：*The index lists them as inference techniques.
 On the index the base model sets most of the score: our trained 35B, 4B and 2B are below these two stock models

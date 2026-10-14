@@ -234,7 +234,7 @@ self.lm = AutoModel.from_pretrained(weights, **load) if weights else AutoModelFo
 
 - 前向返回的是 `last_hidden_state`（`model.py:324`、`model.py:360`），不是 logits；
 - 这条路径上不存在 `[1, n_tokens, vocab]` 张量，也不存在「词表上 renormalise」这个动作；
-- 头的参数量是 `2·d·dp`（Qwen3.5-4B：2 × 2560 × 256 ≈ 1.3 M），与词表大小无关。
+- 头的参数量是 `2·d·dp`（`Qwen/Qwen3.5-4B`：2 × 2560 × 256 ≈ 1.3 M），与词表大小无关。
 
 `LocalPredictor.__call__` 里返回给上层的是**这两组数**（`predictors.py:140-147`）：
 

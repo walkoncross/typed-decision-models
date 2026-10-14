@@ -5,6 +5,7 @@
 > question, and its options go in, and one forward pass returns a probability for each option.*
 > 本文按 `src/jeff/` 的实际代码逐环节说明这句话的实现方式；文中出现的文件名与行号（`head.py:160`、
 > `prompting.py:35-43`、`serve.py:60` 等）均相对该仓库根目录。
+> 文中出现的模型简称（「Gemma 4 31B-it」）对应 Hub 上的 `google/gemma-4-31B-it`；§9.1 引 RYOTIDE 作对照处另提到它的三个 preset（`google/gemma-4-E4B-it`、`Qwen/Qwen3.5-9B`、`Qwen/Qwen3.5-4B`），不是 Jeff 自己的基座。本仓 `docs/comparison.md` 的「基础模型」一行用这套全名。
 
 本文与 [`docs/ryotide/typed-decision-model.md`](../ryotide/typed-decision-model.md) 同构：那篇讲的是**如何把冻结的
 LLM「读」成分类器**，这篇讲的是**如何在那次「读」之上训出一个决策头**。两条路线在第 0 节对照。

@@ -54,7 +54,7 @@ Nimble 与 RYOTIDE 同属「把 LLM 当分类器读」这一支，读法（标�
 
 | 维度 | RYOTIDE | Nimble |
 |---|---|---|
-| 权重 | 冻结 LLM，零新增参数 | Qwen3.5-9B + LoRA rank 16（`README:436`），训练目标是**候选 logits 上的交叉熵**（`schema_train.py:58-60`） |
+| 权重 | 冻结 LLM，零新增参数 | `Qwen/Qwen3.5-9B` + LoRA rank 16（`README:436`），训练目标是**候选 logits 上的交叉熵**（`schema_train.py:58-60`） |
 | 「typed」从哪来 | 分词器里任意标签 token，运行期挑选 | **26 个单 token 大写字母码**（主干）/ **255**（扩展编码器）；K 由请求里的 `choices` 决定，码按位置分配（§2） |
 | 读位置 | **运行期标定**：扫前缀 × 表面形式，取 `marker_mass` 最高 | **由 prompt 构造算出**：每条分支的末位；运行期无标定、无扫描（§3） |
 | 一次前向读什么 | 末位**词表 logits** → 按标记 id 取出 → 掩码 → softmax | 末位 hidden → **只投影候选那 K 行**（FP32）→ softmax；词表维度不出现（§4） |
@@ -645,7 +645,7 @@ fields* 逐字相符——**托管面确实采了 4 个 token，只是不消费�
 
 ## §14 本文不做什么
 
-- **不给任何本机前向产生的数值。** 本机没有权重的 Qwen3.5-9B/4B、没有 MLX、没有 CUDA、
+- **不给任何本机前向产生的数值。** 本机没有权重的 `Qwen/Qwen3.5-9B` / `Qwen/Qwen3.5-4B`、没有 MLX、没有 CUDA、
   没有 Qwen 分词器，所以 §13 之外的所有概率、准确率、ECE、延迟数字**全部是 `README.md` /
   `docs/*.md` 的引文**，不是复现。
 - **不去读 openjev-sglang。** 托管面的读数协议（读哪个位置、`confidence` 具体在哪一行算、

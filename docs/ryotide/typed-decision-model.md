@@ -3,6 +3,7 @@
 > 代码库：<https://github.com/csabag/ryotide>
 > 对应 README 第 3 行：*Reading a local LLM as a typed decision model.*
 > 本文按 `src/ryotide/` 的实际代码逐环节说明这句话的实现方式；文中出现的文件名与行号（`classify.py:42`、`bench/fit_temperature.py` 等）均相对该仓库根目录。
+> 文中出现的模型简称（「Gemma 4 E4B」「Qwen3.5-9B」「Qwen3.5-4B」）对应 Hub 上的 `google/gemma-4-E4B-it`、`Qwen/Qwen3.5-9B` 与 `Qwen/Qwen3.5-4B`——就是 `server.py:57-62` 那三个 preset 各自钉住的模型（本仓 `docs/comparison.md` 的「基础模型」一行用这套全名）。
 
 ## 0. 这句话的四个词分别落在代码的哪里
 

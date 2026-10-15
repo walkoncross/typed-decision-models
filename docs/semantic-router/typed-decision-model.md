@@ -25,12 +25,27 @@
 > `vela2`、`decision3` 各一套。代次顺序按本文惯例是
 > **Decision 1.0 → Decision 2.0 → Vela 2.0 → Decision 3.0**（§16 里的「第四代」即 d3）。
 >
-> **Vela 1.0 与 Omni 不计入这四代**，它们不在这个契约上：`registry/tables/vela1.py` 里
-> `family="task_heads"`（Domain / Guard / Safety / PII / Embedding / Reranker 等）、
-> `registry/tables/omni.py` 里 `family="multimodal_embedding"`（Omni Nano / Mini），
-> 走的是 `/v1/classify` 与 `/v1/embeddings`，不是 `/v1/decisions` 上的类型化读法。
-> 但它与这条线并非无关：**它是 Decision 1.0 的基座来源**（`Vela-1.0-Encoder-307M` 微调出
-> `Decision-1.0-Kai-0.6B`，见 §16.10 的基座链）。
+> **Vela 1.0 与 Omni 不计入这四代**，判据不是名字而是代码里的一个机械事实：
+> 每个家族用一个 `surfaces` 常量声明自己服务哪些面（`plugins/base.py:927-934`，会列进 `/v1/models` 的卡片）——
+>
+> | family | `surfaces` | 位置 |
+> |---|---|---|
+> | `decision1` / `decision2` / `decision3` / `vela2` | `{"decisions"}` | `families/decision1/family.py:77`、`decision2/family.py:53`、`decision3/family.py:167`、`vela2/family.py:121` |
+> | `task_heads`（**Vela 1.0** 的 12 个任务仓 + `Qwen3-Embedding-0.6B`） | `{"classify", "embeddings", "rerank"}` | `families/task_heads/family.py:419` |
+> | `multimodal_embedding`（**Omni** Nano / Mini） | `{"embeddings"}` | `families/multimodal_embedding/family.py:125` |
+>
+> 也就是说：**「是不是这一路的 decision 模型」= `surfaces` 里有没有 `"decisions"`。**
+> Vela 1.0 的每个仓是一个 FP32 ModernBERT + 一个**训练好的头**（约 307.5M 参数，
+> `registry/tables/vela1.py:33-40` 等 12 处），标签集来自**包**而不是请求——调用方在
+> `/v1/classify` 上只能按名字选 `head`（`api/openapi.yaml:656-670` 的 `ClassifyRequest`：
+> `{model, input, head, options}`，**没有 `criteria` / `levels` / `labels` 这种字段**），
+> 而 `/v1/decisions` 的 `DecisionRequest` 正是靠请求声明封闭选项集（§2.1）。两者的读法不同源：
+> 前者读训练好的头，后者读为每个选项**现构造出来的位置**。
+>
+> 这也是「为什么 Vela 1.0 不算、Vela 2.0 却算」的答案——**同一条 Vela 线，1.0 停在编码器 /
+> 分类器面，2.0 才长出 decision 契约**（`vela2` 的 `surfaces` 是 `{"decisions"}`）。
+> 但 Vela 1.0 与这条线并非无关：**它是 Decision 1.0 编码器路径的基座**——
+> `Vela-1.0-Encoder-307M` 微调出 `Decision-1.0-Kai-0.6B`（§16.10 的基座链）。
 
 先说结论式的三句话，后面逐条给代码位置：
 

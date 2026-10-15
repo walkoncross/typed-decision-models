@@ -12,9 +12,25 @@
 > 调度改动（§16.8–§16.9）；文中每一处行号都以 `7313c64` 为准。
 
 与另外二十一篇最大的不同：**这不是一个「把某个 LLM 读成分类器」的小实现，而是这类读法的生产运行时。**
-同一个 HTTP 契约（`/v1/decisions`）底下挂着四代模型、四套读出协议、一组由 **engine arguments** 定下的
-数值语义（§8），外加一个用这套读法做路由决策的 Go 控制面。本文因此有两层：
+同一个 HTTP 契约（`/v1/decisions`）底下挂着**四个 decisions 家族共 23 个已发布包**
+（`decision1` 7 + `decision2` 6 + `vela2` 4 + `decision3` 6，逐个数自 `registry/tables/*.py`）、
+**四套读出协议**、一组由 **engine arguments** 定下的数值语义（§8），
+外加一个用这套读法做路由决策的 Go 控制面。本文因此有两层：
 **Python 侧怎么读**（§2–§5、§10、§16），**Go 侧怎么用**（§1、§10.4、§15）。
+
+> **「四代」数的是什么，先说清**，因为这个数很容易被误读成五代或三套：
+> 它数的是**家族**，四个家族恰好配四套读法，但**两者不是一一对应**——
+> `decision1` 独占两套（`vela-encoder` 与 `qwen3.5-decision`），
+> `decision2` **一整套复用**其中第二套（所以它没有自己的第五套读法，§2.2），
+> `vela2`、`decision3` 各一套。代次顺序按本文惯例是
+> **Decision 1.0 → Decision 2.0 → Vela 2.0 → Decision 3.0**（§16 里的「第四代」即 d3）。
+>
+> **Vela 1.0 与 Omni 不计入这四代**，它们不在这个契约上：`registry/tables/vela1.py` 里
+> `family="task_heads"`（Domain / Guard / Safety / PII / Embedding / Reranker 等）、
+> `registry/tables/omni.py` 里 `family="multimodal_embedding"`（Omni Nano / Mini），
+> 走的是 `/v1/classify` 与 `/v1/embeddings`，不是 `/v1/decisions` 上的类型化读法。
+> 但它与这条线并非无关：**它是 Decision 1.0 的基座来源**（`Vela-1.0-Encoder-307M` 微调出
+> `Decision-1.0-Kai-0.6B`，见 §16.10 的基座链）。
 
 先说结论式的三句话，后面逐条给代码位置：
 
@@ -188,12 +204,32 @@ Vela 2.0 把题型扩到 5 种：`QUESTION_TYPES = (*SYSTEM_ONE_TYPES, *LABELLED
 
 ### 2.2 四套读法，各自的「选项」是什么
 
-| runtime | 家族 / 模型 | 一个选项在模型输入里是什么 | 被评分的量 |
+表按**读法**分行，不按代分行，所以是四行不是五行：
+
+| runtime / 家族 | 模型 | 一个选项在模型输入里是什么 | 被评分的量 |
 |---|---|---|---|
 | `vela-encoder` | Decision 1.0 的 Kai / Lex / Route（`families/decision1/vela.py`） | 一个 `[marker]`（= 分词器的 MASK token）+ 该选项的文本 | 该 `[marker]` 位置过题型头后的**一个标量** |
-| `qwen3.5-decision` | Decision 1.0 的 Eos / Sol / Nox / Lux（`families/decision1/qwen.py`） | 一个 `<option>…</option>` 段 | 该段**末位**的 hidden state 对 query 行的打分 |
+| `qwen3.5-decision`（Decision 1.0 decoder）与 **`decision2`（整个 Decision 2.0）** | Decision 1.0 的 Eos / Sol / Nox / Lux（`families/decision1/qwen.py`）**与 Decision 2.0 的全部六个**（`families/decision2/`：Kai-0.6B / Eos-0.8B / Sol-2B / Nox-4B / Lux-9B / Vega-27B） | 一个 `<option>…</option>` 段 | 该段**末位**的 hidden state 对 query 行的打分 |
 | `vela2-unified` / `vela2-decoder` | Vela 2.0 的 0.3B / 0.8B / 4B / 9B（`families/vela2/`） | 一个 `[O]` 标记（Choice / Score）或一个 `[E]` 标签标记 | 标记位置经 `MarkerHead` 的标量 |
 | `decision3` | Decision 3.0 的 d3 / d3-flash / d3-mini / d3-nano / d3-lite / d3-edge（`families/decision3/`） | 一行 `码: 选项文本`，码是**包里声明的 255 个答案码之一**，且必须单 token | 该题 prompt **最后一个位置**的 hidden state 与 `readout` 里**码 i 那一行**的点积（§16） |
+
+**四个家族（decision1 / decision2 / decision3 / vela2）配四套读法，但不是一一对应**：
+Decision 2.0 **没有自己的第五套读法**——它整段复用第二套，
+`families/decision2/family.py:30` 与 `:43` 分别 import 的正是 `heads/candidate.py` 与
+`text/segments.py`，和 Decision 1.0 的 decoder 是同一份代码。
+
+**但「同一套读法」不等于「同一代」**，Decision 2.0 在四处与 Decision 1.0 的 decoder 分岔，
+逐项都能核：
+
+| 维度 | Decision 1.0 decoder（`qwen3.5-decision`） | Decision 2.0（`decision2`） |
+|---|---|---|
+| 布局声明 | `prompt_version` = `structured-segmented-candidate-endpoints-global-query-v2`（`families/decision1/qwen.py:29`、`:42-43`） | 同一套 `text/segments.py`，但声明 `decision2-segmented-options-global-query-v1`（`families/decision2/package.py:42`、`:244-246`） |
+| 填充倍数 | `collate(…, qwen.PAD_MULTIPLE)`，即 **32**（`families/decision1/model.py:258`、`qwen.py:27`） | `collate(items, pad_id)`，取 `text/segments.py:72` 的缺省 **8**（`families/decision2/family.py:337`） |
+| 8 题物理批 | 有：`physical_batches` 每 8 题一组（`qwen.py:91-107`） | **没有**：既没有 `physical_batches` 也不 override `exact_batches`（该文件里两个名字都出现 0 次），于是落到 `plugins/base.py:900-907` 的缺省 `None`，由 `scheduler/planner.py:48-55` 退到 `micro_batches`——**一次填充批，只按前向 token 预算切** |
+| `confidence` | `decision_type_aware_v1`：margin / `1−var/uniform`（§10.1） | 归一化熵 `1 − H/log k`，且 score 另有 `score_bias`（§10.1–10.2） |
+
+（第 2、3 行的后果见 §4.3：这一代**既不对齐到 32、也没有固定物理批**——
+引用「Decision 系列每 8 题一次前向」这句话时，它只对 1.0 成立。）
 
 四套读法的共同点是：**模型永远不会「写出」标签**。`output_tokens` 在响应组装处硬编码为 0
 （`runtime.py:1020` 的 `{"input_tokens": plan.input_tokens, "output_tokens": 0}`），
@@ -294,7 +330,17 @@ d3 读的就是「码」，只是码不是词表里的标签 id，而是包自�
 
 ---
 
-## 4. 一次前向：三种读法，三次不同的 gather
+## 4. 一次前向：四种读法，四次不同的 gather
+
+这一节只展开前两套（`vela-encoder` 与 `qwen3.5-decision` / `decision2` 共用的那条），
+另外两套的前向写在各自的位置，**四套都要读完才算把「一次前向读哪里」看全**：
+
+| 读法 | 前向与读出在哪 |
+|---|---|
+| ① `vela-encoder` | 本节 §4.1 |
+| ② `qwen3.5-decision` 与 `decision2` | 本节 §4.2 |
+| ③ `vela2-unified` / `vela2-decoder` | §3.3（八个标记的布局）、§10.2（阈值族与 `[ABS]`）；`MarkerHead` 在 `heads/marker.py` |
+| ④ `decision3` | §16.3（一条 prompt、读末位）、§16.4（255 路码表读出与掩码）；打包与合批见 §16.8 |
 
 ### 4.1 Vela：一次 encode，三套层堆，读 K 个槽位
 
@@ -368,17 +414,21 @@ with torch.inference_mode():
 用 0 补齐到最宽行」，`query` 是「每行一个 query 位置」，`shared_prefix > 0` 才让引擎走共享上下文
 （§7）。**解码器路径不物化词表维度**——与 Jeff、Laya、SemIf-OpenJev 同侧，与 RYOTIDE 不同。
 
-### 4.3 分块与批：`PHYSICAL_BATCH = 8` 与 32 的填充倍数
+### 4.3 分块与批：`PHYSICAL_BATCH = 8`、32 的填充倍数，以及**没有**物理批的那一代
 
-两条 runtime 都把请求切成 8 题一组的**物理批**，但切法不同：
+这个变量**逐家族不同**，别按「Decision 系列」一把抓：
 
-| | 切法 | 位置 |
-|---|---|---|
-| vela-encoder | 按题型**稳定排序**后每 8 题一组；批内填充到最长行（不做倍数对齐） | `vela.py:30`、`vela.py:158-168` |
-| qwen3.5-decision | 保持请求顺序每 8 题一组；填充到 **32 的倍数** | `qwen.py:26-27`、`qwen.py:91-107` |
+| 家族 / runtime | 一个请求怎么切成多次前向 | 填充 | 位置 |
+|---|---|---|---|
+| vela-encoder | 按题型**稳定排序**后每 8 题一组 | 批内填充到最长行（不做倍数对齐） | `vela.py:30`、`vela.py:158-168` |
+| qwen3.5-decision（D1 decoder） | 保持请求顺序每 8 题一组 | 填充到 **32 的倍数** | `qwen.py:26-27`、`qwen.py:91-107` |
+| **decision2（整个 Decision 2.0）** | **不分物理批**：一次填充批，只按前向 token 预算切 | 填充到 **8 的倍数**（`collate` 的缺省） | `scheduler/planner.py:48-55`、`families/decision2/family.py:337`、`text/segments.py:72` |
+| decision3 | 参考前向每 8 题一组；服务路径按 lane 合批（§16.8） | 左填充；合并批可能改走打包 | `families/decision3/family.py:79`、`:484-489` |
 
 qwen 的 `_within()`（`qwen.py:110-126`）还会在超过前向 token 预算时把一批再切小，
 而 docstring 明说发布的包**从不会触发它**（八行 × 输入上限仍在预算内）。
+**Decision 2.0 那一行是这次核对才补上的**：它既没有 `physical_batches`，也不 override
+`exact_batches`，所以「Decision 系列每 8 题一次前向」这句话**只对 1.0 成立**（§2.2）。
 
 ---
 
@@ -1090,7 +1140,7 @@ RYOTIDE §13 的四条，在这一路上的落位**整齐得出乎意料**——
 | `…/supervision/readiness.py` | 197 | `golden_check` 与两个容差（CPU 1e-3 / GPU 0.02 / NPU 复用 GPU 档）；四个设备类别 |
 | `…/api/openapi.yaml` + `app.py` | 1 565 + 289 | 唯一契约（`info.version` 与 `API_VERSION` 都是 **3.0.0**）；`/v1/decisions` 与 `/v1/systemone` 是同一条路由 |
 | `…/config.py` | 273 | **`EngineArgs` 的家**（`config.py:43-66`）与逐模型覆盖的合并规则 |
-| `…/registry/tables/decision1.py` `decision2.py` `vela2.py` `decision3.py` | 192 / 78 / 123 / 174 | 每个发布模型的 revision、逐文件 SHA-256、参数量、kernel choices |
+| `…/registry/tables/decision1.py` `decision2.py` `vela2.py` `decision3.py` | 192 / 78 / 123 / 174 | **四个 decisions 家族**的每个发布模型：revision、逐文件 SHA-256、参数量、kernel choices。同目录下另有 `vela1.py`（242 行，`family="task_heads"`）与 `omni.py`（75 行，`family="multimodal_embedding"`）——**那两条不走 `/v1/decisions`**，本文只在基座那一处提到它们（§16.10） |
 | `…/registry/golden_answers_decision1.json` 等 | — | **committed 的加载期参考值**，也是本文 §14 的唯一数据源 |
 | `src/semantic-router/pkg/modelservice/client.go` | — | Go 侧的 HTTP 客户端（契约生成）；`encodeDecisionRequest`（`:175`）/ `decodeAnswer`（`:345`）/ `checkedAnswer`（`:391-425`） |
 | `…/pkg/modelservice/answer_check.go` | — | Go 侧的一致性校验（Σp 容差 **0.02**，比 Python 侧的 2e-5 宽五个数量级）；`:27` 的 `answerFits` |

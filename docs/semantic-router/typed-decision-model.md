@@ -4,13 +4,17 @@
 > 对应 `src/model-runtime/README.md` 第 3 行：*`vllm-srun` serves the router's models (decision models,
 > classifiers, embedders and rerankers) behind one HTTP contract. One process can serve several models.*
 > 本文按 `src/model-runtime/vllm_srun/` 与 `src/semantic-router/pkg/` 的实际代码逐环节说明这句话的实现方式；
-> 文中出现的文件名与行号（`systemone.py:24`、`families/decision1/vela.py:119`、
+> 文中出现的文件名与行号（`systemone.py:24`、`families/decision1/vela.py:120`、
 > `classifier_signal_decision_model.go:58` 等）均相对该仓库根目录。
+>
+> **本文覆盖的上游快照**：提交 `7313c64`（2026-10-15）。初稿写于 `61677a4`（2026-10-12），
+> 两者之间有一次破坏性改动（**数值 profile 被 engine arguments 取代**，§8）与一批 Decision 3.0 的
+> 调度改动（§16.8–§16.9）；文中每一处行号都以 `7313c64` 为准。
 
-与另外十七篇最大的不同：**这不是一个「把某个 LLM 读成分类器」的小实现，而是这类读法的生产运行时。**
-同一个 HTTP 契约（`/v1/decisions`）底下挂着四代模型、四套读出协议、四档数值精度的 profile，
-外加一个用这套读法做路由决策的 Go 控制面。本文因此有两层：**Python 侧怎么读**（§2–§5、§10、§16），
-**Go 侧怎么用**（§1、§10.4、§15）。
+与另外二十一篇最大的不同：**这不是一个「把某个 LLM 读成分类器」的小实现，而是这类读法的生产运行时。**
+同一个 HTTP 契约（`/v1/decisions`）底下挂着四代模型、四套读出协议、一组由 **engine arguments** 定下的
+数值语义（§8），外加一个用这套读法做路由决策的 Go 控制面。本文因此有两层：
+**Python 侧怎么读**（§2–§5、§10、§16），**Go 侧怎么用**（§1、§10.4、§15）。
 
 先说结论式的三句话，后面逐条给代码位置：
 
@@ -19,6 +23,8 @@
 2. 读完之后的 softmax / 掩码 / 重归一化**全部在 Python 运行时内完成**；Go 侧一个数都不改，
    只做阈值与一致性校验（§10.4）。
 3. 这条线上**没有任何运行期标定**：读位置、prompt 布局、温度、阈值全是训练期或打包期定死的常量（§3、§10）。
+   §8 那次改动往**加载期**加了一次标定，但它标的只有「一批最多多少 token」这一个调度量，
+   不碰上面任何一个决定答案的量（§8.3）。
 
 ## 本文的事实来源
 
@@ -26,12 +32,14 @@
 |---|---|---|
 | 代码引用 | `src/model-runtime/vllm_srun/**`（Python 运行时）、`src/semantic-router/pkg/**`（Go 控制面）、`tools/calibration/**` | `文件:行` |
 | 可实跑得到的产物 | `registry/golden_answers_*.json` 是**committed 的发布产物**：容量小、纯 JSON、可直接重算 | 标注「实测」，并注明是「在 committed 产物上重算」 |
-| 上游记录的数字 | `src/model-runtime/docs/records/*.md`（parity / performance 记录）、`tools/calibration/systemone_auto/README.md` | 引原文并给出 `文件:行` |
-| 未跑 | **本机没有权重、没有取模型包，本文没有跑过任何前向** | 照例不给任何前向产生的概率数值 |
+| 上游记录的数字 | `src/model-runtime/docs/records/*.md`（parity / performance 记录，`decision3-*.md` 见 §16.8）、`tools/calibration/systemone_auto/README.md` | 引原文并给出 `文件:行` |
+| 模型包里的常量 | **`decision_config.json` / `config.json` 经 Hugging Face 按钉住的 revision 取到**（§16.10 给命令），`readout.safetensors` 只取头部字节（HTTP Range），**不下权重** | 标注「包内声明」，并注明 revision |
+| 未跑 | **本机没有权重，本文没有跑过任何前向** | 照例不给任何前向产生的概率数值 |
 
-本文所有「实测」都只有一类动作：**从 committed 的 golden answers 里读数字、用标准库算术重算，
-再与记录值比对**（§14）。没有运行上游的任何程序，也没有下载任何模型。这一点在 §14 会把命令原样列出，
-任何人都可以只用一个 Python 标准库复现。
+本文所有「实测」都只有两类动作，两类都不运行上游程序：**①从 committed 的 golden answers 里读数字、
+用标准库算术重算，再与记录值比对**（§13.1、§14）；**②按钉住的 revision 取模型包里的几个小文件与
+`safetensors` 头部**（§16.10）。§14 与 §16.10 都把命令原样列出，用一个 Python 标准库加一个 `curl`
+即可复现。没有下载任何权重，也没有跑过任何前向。
 
 ---
 
@@ -41,8 +49,8 @@
 
 | | RYOTIDE | vLLM Semantic Router |
 |---|---|---|
-| 是什么 | 一个读法（脚本 + 服务） | 一个**运行时**：四代模型 × 四套读法 × 四档 profile，外加一个消费它的 Go 路由器 |
-| 权重 | 公开 LLM，全程 frozen | 自家发布的模型包（`vllm-sr/Decision-1.0-*`、`Decision-2.0-*`、`Vela-2.0-*`，以及六个 `vllm-sr/d3*`），`src/training/` 里的训练代码**不产出这些包**（见下；d3 见 §16.1） |
+| 是什么 | 一个读法（脚本 + 服务） | 一个**运行时**：四代模型 × 四套读法 × 一组 engine arguments（§8），外加一个消费它的 Go 路由器 |
+| 权重 | 公开 LLM，全程 frozen | 自家发布的模型包（`vllm-sr/Decision-1.0-*`、`Decision-2.0-*`、`Vela-2.0-*`，以及六个 `vllm-sr/d3*`），`src/training/` 里的训练代码**不产出这些包**（见下；d3 见 §16.1）。**基座这次核出来了**：包内 `decision_config.json` 自己声明 `base_model`，六个 d3 分别是 `Qwen3.8-27B` / `Qwen3.5-9B` / `Qwen3.5-4B` / `Qwen3.5-2B` / `Qwen3.5-0.8B` / `Qwen3.5-0.8B`（§16.10） |
 | 「typed」怎么保证 | 标签必须落在**单 token** | **四套并列**：encoder 的 `[MASK]` 槽位、decoder 的选项段末位、Vela 2.0 的 8 个标记 token、d3 的 255 路答案码读出（§2、§3、§16）。**只有第四套把「单 token」当成硬约束**——但那约束落在包声明的**答案码**上，不落在标签文本上（§16.2） |
 | 读几个位置 | 1 个（末位） | Vela：每题 K 个槽位；Qwen：K 个端点 + 1 个 query；Vela 2.0：每题若干标记 token；**d3：每题 1 个，就是末位**（§4、§16.3） |
 | 读位置怎么定 | **运行期标定**（扫 9 前缀 × 2 表面形式） | **训练期定义在 checkpoint 布局里，运行期零标定**（§3、§16.3） |
@@ -81,30 +89,32 @@ Jeff / OpenJev(HF) 那两篇的处境相反，那两篇能直接读训练侧。
                               │
                               ▼  HTTP（客户端是 openapi.yaml 的生成产物）
    ┌──────────────── pkg/modelservice ────────────────┐
-   │ encodeDecisionRequest()      client.go:200        │
+   │ encodeDecisionRequest()      client.go:175        │
    │   api.DecisionRequest{Model, State, Questions,    │
    │                       Options{DeadlineMs,         │
    │                               MaxTokens}}         │
-   │ labelCriteria.MarshalJSON()  client.go:224-253    │ ← 标签**按声明顺序**序列化
+   │ labelCriteria.MarshalJSON()  client.go:201-228    │ ← 标签**按声明顺序**序列化
    │ CreateDecisionsWithResponse  surfaces.go:217      │
    └───────────────────────┬──────────────────────────┘
                            ▼  POST /v1/decisions（别名 /v1/systemone）
    ┌──────────────── src/model-runtime/vllm_srun ───────────────────┐
    │ api/app.py:197-201   两条路由指向同一个 surface_route("decisions")│
-   │ runtime.call → prepare(): 校验 → plan_surface()  runtime.py:906 │
+   │ runtime.call → prepare(): 校验 → plan_surface()  runtime.py:968 │
    │   DecisionModel.plan_surface  plugins/decisions.py:236           │
    │     ├─ refuse_unanswerable：全题无效 → 400                      │
    │     └─ family.plan(state, questions)                            │
    │          ├─ systemone.read_question()   ← 题型与字段的封闭校验   │
    │          ├─ render(row, state, tokens)  ← 四套布局之一（§3）     │
    │          └─ RequestPlan{items, errors, input_tokens}             │
-   │ scheduler → profile → family.run(items) → 每题的候选概率列表     │
+   │ scheduler → Batcher（engine arguments 定的）→ family.run(items)  │
+   │   并发请求的行按 lane 合批（§8）；golden 走 reference 路径        │
+   │   → 每题的候选概率列表                                          │
    │   ├─ Vela：  softmax on device，**不**在 host 重归一化（§5.2）   │
    │   ├─ Qwen：  softmax(logits/T) on device → **host 重归一化**      │
    │   └─ d3：    255 路 softmax(logits/T) on device → host 重归一化   │
    │                （§16.4；末位读出，掩码打的是包里没用到的码）     │
-   │ finish_surface() → 每题一个 typed answer    decisions.py:281     │
-   │ runtime.finish(): usage{input_tokens, output_tokens: 0}  :961-963│
+   │ finish_surface() → 每题一个 typed answer    decisions.py:284     │
+   │ runtime.finish(): usage{input_tokens, output_tokens: 0}  :1020   │
    └───────────────────────┬─────────────────────────────────────────┘
                            ▼
    { model, answers{id → {type, choice|noul|score, probabilities,
@@ -112,8 +122,9 @@ Jeff / OpenJev(HF) 那两篇的处境相反，那两篇能直接读训练侧。
                            │
                            ▼
    ┌────────── Go 侧解码与消费 ──────────┐
-   │ decodeAnswer()      client.go:370    │
-   │ checkAnswers()      answer_check.go:17│ ← 不符的整条改判 invalid_model_output
+   │ decodeAnswer()      client.go:345    │
+   │ checkedAnswer()     client.go:394    │ ← 解码期就查 confidence/probabilities ∈[0,1]（§9.5）
+   │ checkAnswers()      answer_check.go:18│ ← 不符的整条改判 invalid_model_output
    │ applyDecisionAnswer()  classifier_signal_decision_model.go:167
    │   Choice → 每选项一条信号 + 选中项一条  :187-197
    │   Noul   → P(true)                     :171-176
@@ -130,6 +141,15 @@ Jeff / OpenJev(HF) 那两篇的处境相反，那两篇能直接读训练侧。
 - **失败是 fail-open 的**：`evaluateDecisionModelSignals` 的 docstring 明写 *A failed or late call
   leaves its signals unknown; it never fails the request*（`:33-35`），错误被写进
   `results.SignalErrors["decision:"+name]`（`:109`、`:118`）。这与 Python 侧几乎处处置错的风格正好相反（§9）。
+
+**这张图只是两条路里的一条。** 上游还有第二条：**外部客户端直接打路由器的公开 System One 面**
+（`pkg/systemone/`，§9.5）。那条路是「客户端 → 路由器 → 某个 deployment 的 runtime」，
+而 `classifier_signal_decision_model.go` 那条**完全绕开它**——决策信号走
+`pkg/modelservice` 的内部客户端，两条路互不 import。所以本文凡说「Go 侧」，
+读者要先分清指的是哪一条：**§10.4 与 §16.6 讲的是信号那条**，
+**§9.5 讲的是公开面那条**。上游自己的命名里有两个 `systemone`，也容易混：
+Python 侧 `src/model-runtime/vllm_srun/systemone.py` 是**请求语义**（题型与字段校验），
+Go 侧 `src/semantic-router/pkg/systemone/` 是**公开 HTTP 面**。
 
 ---
 
@@ -176,8 +196,8 @@ Vela 2.0 把题型扩到 5 种：`QUESTION_TYPES = (*SYSTEM_ONE_TYPES, *LABELLED
 | `decision3` | Decision 3.0 的 d3 / d3-flash / d3-mini / d3-nano / d3-lite / d3-edge（`families/decision3/`） | 一行 `码: 选项文本`，码是**包里声明的 255 个答案码之一**，且必须单 token | 该题 prompt **最后一个位置**的 hidden state 与 `readout` 里**码 i 那一行**的点积（§16） |
 
 四套读法的共同点是：**模型永远不会「写出」标签**。`output_tokens` 在响应组装处硬编码为 0
-（`runtime.py:961-963` 的 `{"input_tokens": plan.input_tokens, "output_tokens": 0}`），
-契约里也把它列为 required（`api/openapi.yaml:605-611`）。
+（`runtime.py:1020` 的 `{"input_tokens": plan.input_tokens, "output_tokens": 0}`），
+契约里也把它列为 required（`api/openapi.yaml:599-604`，版本已升到 `3.0.0`，§9.1）。
 
 ### 2.3 一个反例：Decision 2.0 的 Kai 不是 encoder 而是 decoder
 
@@ -195,7 +215,7 @@ RYOTIDE 花了一整节在运行期扫 `SUFFIXES × PATTERNS`、用 marker mass 
 
 ### 3.1 Vela encoder：每个候选前面放一个 `[marker]`
 
-`families/decision1/vela.py:100-139` 的 `render()` 是全部：
+`families/decision1/vela.py:100-139` 的 `render()` 是全部（行号未变）：
 
 ```python
 ids = [special["bos"], *tokens(f"{row.kind} question: {instructions}"), special["sep"]]
@@ -278,7 +298,7 @@ d3 读的就是「码」，只是码不是词表里的标签 id，而是包自�
 
 ### 4.1 Vela：一次 encode，三套层堆，读 K 个槽位
 
-`VelaDecisionModel.run`（`families/decision1/model.py:162-177`）很短：
+`VelaDecisionModel.run`（`families/decision1/model.py:161-176`）很短：
 
 ```python
 with torch.inference_mode():
@@ -354,7 +374,7 @@ with torch.inference_mode():
 
 | | 切法 | 位置 |
 |---|---|---|
-| vela-encoder | 按题型**稳定排序**后每 8 题一组；批内填充到最长行（不做倍数对齐） | `vela.py:30`、`vela.py:160-168` |
+| vela-encoder | 按题型**稳定排序**后每 8 题一组；批内填充到最长行（不做倍数对齐） | `vela.py:30`、`vela.py:158-168` |
 | qwen3.5-decision | 保持请求顺序每 8 题一组；填充到 **32 的倍数** | `qwen.py:26-27`、`qwen.py:91-107` |
 
 qwen 的 `_within()`（`qwen.py:110-126`）还会在超过前向 token 预算时把一批再切小，
@@ -370,7 +390,7 @@ qwen 的 `_within()`（`qwen.py:110-126`）还会在超过前向 token 预算时
 |---|---|---|---|
 | vela-encoder | 读出后的**候选槽位** | `torch.finfo(torch.float32).min` | `vela.py:237`、`vela.py:332` |
 | qwen3.5-decision | 候选头的**补齐槽位** | `-inf` | `candidate.py:77-82` |
-| decision3 | 255 路读出里**本题没用到的那 255−k 个码** | `-inf` | `families/decision3/family.py:678-683` |
+| decision3 | 255 路读出里**本题没用到的那 255−k 个码** | `-inf` | `families/decision3/family.py:995-1000` |
 
 **前三代都用不到「词表掩码」**：候选集合要么是 gather 出来的 K 个位置、要么根本不进 softmax，
 而不是从词表里挑标签 id。RYOTIDE §5 那种「把词表里非标记的位置打成 `-inf`」在前三代没有对应物——
@@ -387,7 +407,7 @@ RYOTIDE 打的是整个词表，d3 打的是一个随包发布、恰好 255 项�
   于是该批每一题都变成 `invalid_model_output`。若把补齐槽位打成 `-inf`，
   任何「批内选项数不齐」的正常请求都会触发这条分支——所以这里**必须**用一个有限值（`finfo.min`）。
 - Qwen / Decision 2.0 路径没有这个检查：`-inf` 只写在候选头上（`candidate.py:82`），
-  而结果一取出来就按 `[:len(item.keys)]` 切片（`model.py:175`、`decision2/family.py:344`），
+  而结果一取出来就按 `[:len(item.keys)]` 切片（`model.py:174`、`decision2/family.py:348`），
   非有限检查是在**切片之后**的概率上做的（`qwen.py:145`、`decision2/answers.py:35-39`）。
   补齐槽位在进 softmax 之前就没了，`-inf` 不会变成 NaN。
 
@@ -428,7 +448,7 @@ decoder（Eos / Sol / Nox / Lux，16 条分布）：max |Σp − 1| = 0.0（16 �
 encoder 一栏永远差一点点，decoder 一栏则严丝合缝。RYOTIDE §5 留下的「掩码 softmax 之后还要不要
 再归一化」在这里有了一条**分叉的答案**：同一个运行时里，一条路径做、另一条不做。
 
-**Decision 3.0 站在「做」的那一侧**：`families/decision3/family.py:361-362` 在 host 上
+**Decision 3.0 站在「做」的那一侧**：`families/decision3/family.py:385-386` 在 host 上
 float64 重算一遍 `values = [v / total for v in values]`，与 decoder 同一处理（§16.4）。
 在 committed 的 `golden_answers_decision3.json` 上可以用同一对判据量出来（§13.1、§14.5）：
 36 条分布里 **35 条的 `Σp` 精确为 1**，剩下一条差 1.11e-16（float64 的一个 ulp）；
@@ -436,18 +456,19 @@ float64 重算一遍 `values = [v / total for v in values]`，与 decoder 同一
 qwen3.5-decision / Decision 2.0 与 decision3 都在 host 上再归一化一遍，而 vela2 的整个 softmax
 本来就在 host 的 float64 里做（`families/vela2/answers.py:57-67`）。
 
-### 5.3 温度在 softmax 之前，且只有 decoder 有
+### 5.3 温度在 softmax 之前，且不只在 decoder 上
 
 - Vela 路径**没有温度**：`vela.py` 里没有任何 temperature 符号，包也不许带标定——
   `file_map()` 明写 `if runtime == VELA and calibration: raise PackageError("vela-encoder packages are uncalibrated")`
-  （`families/decision1/package.py:139-140`）。
+  （`families/decision1/package.py:139-140`、`:112` 的 `file_map`）。
 - Qwen 路径的 softmax 分母就是温度：`softmax(logits / temperatures[task_type])`（`qwen.py:134`）。
-  温度来自包：要么一个常数，要么一个 per-type 文件（`package.py:178-191`）。
+  温度来自包：要么一个常数，要么一个 per-type 文件（`families/decision1/package.py:178-191`）。
 - Decision 3.0 也有温度，而且**它被折进了模型身份**：值写在 `decision_config.json`，
   缺省 1.0，但必须是正的有限数（`families/decision3/package.py:194-200`），
   而 `temperature` 是 `INFERENCE_FIELDS` 的一项，直接参与 `model_sha256` 的重算
-  （`package.py:44-57`、`:124-132`）——**改温度就是改一个模型的身份**（§16.1）。
-  softmax 的分母就是它（`families/decision3/family.py:681-683`）。
+  （`package.py:44-56`、`:124-132`）——**改温度就是改一个模型的身份**（§16.1）。
+  六个发布包这次核到 `temperature` **都是 1.0**，即身份字段目前没被用来改数（§16.10）。
+  softmax 的分母就是它（`families/decision3/family.py:998-1000`）。
 
 所以「温度改不改数值」这件事在这个仓里**逐 runtime 不同**，不逐模型不同。见 §10.3。
 
@@ -456,7 +477,7 @@ qwen3.5-decision / Decision 2.0 与 decision3 都在 host 上再归一化一遍�
 ## 6. 顺序偏置：既不消除，也不度量，只有一个 tie-break 是顺序相关的
 
 JevBench 记过 open-alternative-jev 在 `A. yes, B. no` 上 72%、顺序反过来 21%。
-另外十七篇给的答案各不相同（RYOTIDE 多 order 平均、Laya 训练期消解、OpenJev(HF) 训练期压低、
+另外二十一篇给的答案各不相同（RYOTIDE 多 order 平均、Laya 训练期消解、OpenJev(HF) 训练期压低、
 SemIf-OpenJev 只度量不消除）。**这一路给出的答案是：不处理。**
 
 把话说准一点，分三层：
@@ -467,16 +488,16 @@ SemIf-OpenJev 只度量不消除）。**这一路给出的答案是：不处理�
 | 命中 | 是什么 | 与本文的关系 |
 |---|---|---|
 | `pkg/promptcompression/compressor.go:69` | prompt 里**句子**的中间位置惩罚（lost-in-the-middle） | 压的是上下文，不是选项 |
-| `pkg/shadowdataset/judgments.go:157` | 让每对候选**两种顺序各出现一次**，统计 `SlotFollowingPairs` | 属于**裁判（LLM judge）路径**，有 `output_tokens` 与 `cost_usd`，不是类型化读法 |
+| `pkg/shadowdataset/judgments.go:148` | 让每对候选**两种顺序各出现一次**，统计 `SlotFollowingPairs` | 属于**裁判（LLM judge）路径**，有 `output_tokens` 与 `cost_usd`，不是类型化读法 |
 | `pkg/modelservice/modelservice.go:30` | 注释：`Choices keep Choice / Noul option order` | 说明顺序**是语义**，不是缺陷 |
 
 **(2) 顺序确实是变量，而且是**被刻意保留**的变量。** Go 侧把 Set / Span 的标签**按声明顺序**序列化，
-注释写得毫不含糊（`modelservice/client.go:224-225`）：
+注释写得毫不含糊（`modelservice/client.go:199-200`）：
 
 > `labelCriteria encodes Set and Span labels as the criteria object in label order: a label's position is part of the question the model reads.`
 
 Python 侧同样按请求顺序铺槽位（`families/decision1/questions.py:99` 的 `Candidate(*option)`
-直接沿用 `criteria.items()` 的顺序；`vela.py:119` 的 `for index, candidate in enumerate(...)`）。
+直接沿用 `criteria.items()` 的顺序；`vela.py:119-120` 的 `for index, candidate in enumerate(...)` 与 `markers.append(len(ids))`）。
 **顺序一路传到底，没有任何一处打乱或平均。**
 
 **(3) 唯一的顺序依赖是一条写明的 tie-break。** Decision 2.0 在概率精确并列时
@@ -503,7 +524,8 @@ Python 的 `max` 本来就在并列时取第一个，行为一致但没写注释
 ## 7. 多问题共享 state
 
 一个请求带多道题（上限 `MAX_QUESTIONS = 1024`，`families/decision1/questions.py:17`），
-state 是同一段文本。这一路的做法与前三篇都不同：**它把「要不要共享」做成了一个可选的 profile。**
+state 是同一段文本。这一路的做法与前三篇都不同：**它把「要不要共享」做成了五个 engine argument 里的一个**
+（`enable_shared_context`，§8），而且**对 Decision 2.0 默认是开的**。
 
 ### 7.1 `states`：一个请求里的多段 state
 
@@ -514,10 +536,17 @@ state 是同一段文本。这一路的做法与前三篇都不同：**它把「
 `plan_surface` 只在**非 part** 的顶层调用 `refuse_unanswerable`（`decisions.py:276-277`）——
 分片的拒绝留给 `join_states` 统一做。
 
-### 7.2 `shared_context` profile：树模式
+### 7.2 `enable_shared_context`：树模式（从一个 profile 档变成了一个 engine argument）
 
-`profiles/shared_context.py` 是这一路独有的东西。它的做法不是「缓存前缀的 KV」，
-而是**把公共前缀与各题的续写拼成一条行**（`TreeBatch`，`plugins/base.py:406-422`）：
+树模式的代码整段从 `profiles/shared_context.py` 搬到了 `scheduler/batching.py`（类 `SharedContext`，
+`:226-277`），开关变成 engine arguments 里的一项 `enable_shared_context`（`config.py:66`）。
+缺省是 `None`，含义是「按家族的默认」（`runtime.py:460-468`），而**Decision 2.0 的默认是开**
+（`families/decision2/family.py:253-256` 的 `shared_context_default = True`；基类缺省 `False`，
+`plugins/base.py:796`）。这是改名带来的**两处默认行为变化之一**，另一处是「合批成为默认」（§8.4）——
+两处都会改数，所以都值得单独记。
+
+它的做法不是「缓存前缀的 KV」，而是**把公共前缀与各题的续写拼成一条行**
+（`TreeBatch`，`plugins/base.py:419-427`）：
 
 ```python
 def shared_prefix(items, align=1) -> int:
@@ -530,12 +559,12 @@ def shared_prefix(items, align=1) -> int:
     return min(common, limit) // align * align
 ```
 
-共享前缀是「所有题目的最长公共 token 前缀，**切在第一个选项端点之前**」（`:44-54`）。
-`share()`（`:98-113`）再叠上一组闸门：至少 `min_questions = 2` 题、
-省下的前缀 token `(questions - 1) * prefix` 必须超过**实测的盈亏平衡点**、
+共享前缀是「所有题目的最长公共 token 前缀，**切在第一个选项端点之前**」（`scheduler/batching.py:196-205`，
+与旧版逐字相同）。`SharedContext.share()`（`:262-277`）再叠上一组闸门：至少 `min_questions = 2` 题
+（`SharePolicy:187-193`）、省下的前缀 token `(questions - 1) * prefix` 必须超过**实测的盈亏平衡点**、
 且拼起来的行要装得进前向 token 预算。
 
-盈亏平衡点是硬编码的一张表（`:28-31`）：
+盈亏平衡点仍是硬编码的一张表（`:45-48`）：
 
 ```python
 DENSE_BREAK_EVEN = (3072, 1024)                                     # (带图, eager)
@@ -543,63 +572,171 @@ HYBRID_BREAK_EVEN = ((1024, 6144, 2048), (2048, 3072, 1536), (3072, 1536, 1024))
 WIDE_HYBRID_BREAK_EVEN = 512
 ```
 
-`auto_shared_tokens()`（`:56-72`）按 backbone 的 `hidden_size` 与有没有 `linear_attention` 层查表，
+`auto_shared_tokens()`（`:208-223`）按 backbone 的 `hidden_size` 与有没有 `linear_attention` 层查表，
 注释写明这是 *the break-evens measured on one MI325X for the released runtime's switch*——
 **上游记录的实测值，不是本文跑出来的**。它是「共享是有代价的」这句话的少见例子：
 共享要多发 launches（一条打包行、每层两个 attention 或 gated-delta kernel），
 小 backbone 要够大的请求才回本。
 
-### 7.3 共享是**近似**的
+### 7.3 共享被记成 `approximate`，但记录里的答案是「与发布开关逐条相同」
 
-`SharedContextProfile.numerics = "approximate"`（`:76`），docstring 也直说
-*Answers can differ from the exact path by rounding*（`:12-13`）。
-记录在案的数字（`docs/records/decision1-parity.md`，**上游记录**）：
+`numerics` 不再是某个类上的属性，而是运行时**派生**出来的二值量（`runtime.py:470-477`）：
 
-> `shared_context`, decoders, ROCm: Eos max |Δp| 0.046 / 决策变化 0/0；Sol 0.031 / 10 of 320、15 of 640；
-> Nox 0.025 / 0/0；Lux 0.032 / 5 of 320、0。每个变化的决定都是 bundled runtime 自己答案里的 near-tie
-> （top-two margin ≤ 0.0032（Sol）、0.034（Lux））。
+```python
+self.numerics = ("exact"
+                 if model.batch_invariant and self.dtype == "auto"
+                 and not self.shared and not model.engine_model.approximate_kernels
+                 else "approximate")
+```
 
-与 SemIf-OpenJev §7 的「8.6× 加速换来 5–6/777 的 argmax 漂移」是同一类交易，
-但这里把「要不要做这笔交易」变成了**启动参数**而不是默认行为（§8）。
+**只要开了共享就落到 `approximate`**——这是「共享改形状」这件事在契约里唯一的落点。
+但两份记录给出的是另一幅画面：
+
+- **Decision 2.0（`docs/records/rocm-mi325x-batching.md:43-59`，上游记录）**：
+  共享的答案与**发布运行时自己的 `share_context=True` 逐条相同**（六个尺寸共 207/207 条请求），
+  改掉的决策都是 near-tie（top-two margin < 0.015，只有一条例外），四个 panel 的准确率差 95% CI 都含 0。
+  也就是说：这一档**对着一个可比的参考物**，而不是「和精确路径不一样但没人量」。
+  速度（128 题 × 约 240 token 输入，`:61-69`）：Kai 199→112 ms、Sol 373→171 ms、Nox 826→315 ms、
+  Lux 1,320→448 ms、Vega-27B 5,286→1,562 ms。
+- **Decision 1.0 的 decoder（`docs/records/decision1-parity.md:350-362`，上游记录）**：
+  发布运行时**没有**共享模式，所以只能与「每道题读全文」比——
+  这里的差异是真的：Eos max |Δp| 0.046 / 决策变化 0/0；Sol 0.031 / 10 of 320、15 of 640；
+  Nox 0.025 / 0/0；Lux 0.032 / 5 of 320、0。每个变化的决定都是 bundled runtime 自己答案里的 near-tie
+  （top-two margin ≤ 0.0032（Sol）、0.034（Lux））。
+
+与 SemIf-OpenJev §7 的「8.6× 加速换来 5–6/777 的 argmax 漂移」是同一类交易。
+**变化在于谁付这笔账**：改名前「要不要做这笔交易」是一个 opt-in 档；
+现在 Decision 2.0 **默认就做**（`shared_context_default = True`），
+而记录里的依据是「它与发布开关逐条相同」——**一笔有参考物背书的默认值**。
+要注意的是这两组数字**不能互换**：Decision 2.0 那组的参考物是「发布运行时自己的开关」，
+Decision 1.0 那组的参考物是「每道题读全文」。引用「共享的误差有多大」之前，
+先问是哪一个家族、以及那一代有没有可比的发布开关。
 
 ### 7.4 计费口径
 
-`RequestPlan.input_tokens = sum(len(item.ids) for item in items)`（`families/decision1/model.py:116`）——
+`RequestPlan.input_tokens = sum(len(item.ids) for item in items)`（`families/decision1/model.py:115`）——
 **逐题累计**，即使 `shared_context` 只算了一次前缀。这与 RYOTIDE 的 `run_many()` 相反、
 与 Jeff / Quyet / Laya 相同。共享省的是**算力**，不是账面上的 `input_tokens`。
 
 ---
 
-## 8. 四档 profile：exact 是默认，三档近似是选项
+## 8. engine arguments：默认就合批，逐字节相同只剩参考路径
 
-这是本仓相对另外十七篇**新增的一个维度**：同一个模型，四档数值语义。
+**这一节是初稿写完之后变化最大的一节。** 初稿里的「四档数值语义的 profile」
+（`exact` / `batching` / `max_speed` / `shared_context`，代码在 `profiles/`）**已经不存在**：
+上游 `36bc632`（*vLLM-style engine arguments replace numerics profiles*）把整个目录删掉——
+`src/model-runtime/vllm_srun/profiles/` 在 HEAD 已经不存在，五个文件全没了。
+取代它的是两个词：
 
-| profile | 谁用 | 语义 | 代码 |
+| 概念 | 是什么 | 谁给 | 位置 |
 |---|---|---|---|
-| `exact` | 所有模型（**默认，golden 自检也跑在它上面**） | 复现发布包的批形状与数值，目标是**逐字节相同** | `profiles/exact.py`、`runtime.py:500-508` |
-| `batching` | encoders | 每种题型只跑自己的行、打包不填充（`run_approximate`） | `families/decision1/model.py:179-212` |
-| `max_speed` | encoders | `batching` + 预打包的 `float32-packed` 权重副本 | `profiles/max_speed.py`、`accel/*` |
-| `shared_context` | decoders | 树模式共享前缀（§7.2） | `profiles/shared_context.py` |
+| **engine arguments** | 五个 **vLLM 命名**的调度参数（下表） | **运维 / 部署** | `config.py:43-66`；契约 `api/openapi.yaml:1458-1487` |
+| **`numerics`** | 二值量 `exact` \| `approximate` | **运行时自己算出来上报** | `runtime.py:470-477`；契约 `api/openapi.yaml:1269-1276` |
 
-`exact` 不是「随便跑一遍」：`runtime.py:500-508` 的 `_profiles()` 说明它**总是**被装进来，
-注释是 *``exact`` (golden checks run on it) and the model's own profile*。
-`vela.py:180-212` 的 `run_approximate` docstring 则把代价写在明处：
+这次改名把「档位」拆成了**输入**（五个参数）与**结论**（一个派生量）——
+初稿里那个「同一个模型四档」的框架没有了，但初稿用它讲的道理一个字没变（§8.5）。
 
-> The released runtime runs every type's stack over the whole padded batch; rows of other types and
-> padding are wasted work, but dropping them changes GEMM and attention shapes, so this is for
-> approximate profiles…
+### 8.1 五个参数
 
-**为什么非拆不可**：记录里量到了批不变性并不成立（`docs/records/decision1-parity.md`，上游记录）：
+`EngineArgs` 是 `config.py:43-66` 的一个 frozen dataclass，docstring 逐字段写了含义：
+
+| 字段 | 缺省 | 含义（docstring 原文的要点） |
+|---|---|---|
+| `max_num_seqs` | `None` → `8192`（`config.py:31`） | 一次前向最多装多少行**（跨请求）**；1 表示每行单独跑。缺省值由 `DEFAULT_MAX_NUM_BATCHED_TOKENS // MIN_ROW_TOKENS` 算出，注释明说 *this default never binds there* |
+| `max_num_batched_tokens` | `None` → `65_536`（`config.py:26`） | 一次前向的 token 上限：打包模型数**各行之和（每行向上取到 8）**，否则数**行数 × 最长行** |
+| `batch_window_ms` | `2.0`（`config.py:32`） | 收到第一个请求后等多久去凑更多（只在 `max_num_seqs > 1` 时有意义） |
+| `dtype` | `"auto"` | backbone 用什么精度算；`auto` = 模型发布时那一档（`DTYPES`，`config.py:22`） |
+| `enable_shared_context` | `None` | 多问题请求的公共 state 只跑一次；`None` = 交给家族的默认（§7.2） |
+
+三个入口都只到这几个参数上：CLI（`--max-num-seqs` 等五个，`cli.py:126-176`）、
+`--models` YAML 的逐模型覆盖（`ModelConfig` 在 `config.py:126-153`，合并规则见 `:146-153`：模型没设的取进程的）、
+路由器侧 `vllm-sr serve` 的同名选项。旧名字被**显式拒绝**而不是忽略：
+CLI 的 `--profile` / `--max-batch-tokens`（`cli.py:34-41`）、YAML 的 `profile` 字段
+（`config.py:35-40`）、请求里的 `options.profile`（`runtime.py:163-171`）。
+`vllm-sr config migrate` 负责把老配置映射过去：`exact` / `batching` → 不给参数（即默认，§8.4）；
+`shared_context` / `max_speed` → `{enable_shared_context: True}`。
+
+### 8.2 `numerics` 是派生量，不是可选项
+
+```python
+self.numerics = ("exact"
+                 if model.batch_invariant and self.dtype == "auto"
+                 and not self.shared and not model.engine_model.approximate_kernels
+                 else "approximate")                                    # runtime.py:470-477
+```
+
+四个条件里只要有一个不成立就是 `approximate`：模型不是批不变、`--dtype` 不是 `auto`、
+开了共享上下文、或装了近似 kernel。**调用方再也挑不了「跑哪一档」**——他挑的是参数，
+档位是运行时报出来的结论。`/v1/models` 的卡片与 `return_meta` 的响应都改报
+`engine_args` + `numerics`（`runtime.py:685-691` 的卡片、`:638-651` 的 `meta`），`meta.profile` 这个字段没有了。
+
+### 8.3 加载期标定：只标一个调度量
+
+新出现的 `scheduler/calibration.py`（273 行）做的事，是**给没写 `max_num_batched_tokens` 的
+GPU 部署定一个批上限**。顺序是 golden 自检之后、置 ready 之前
+（`runtime.py:518-536` 的 `self.health.set("warming", "calibrating the token budget")`）。
+
+- 先按显存分档给一个起点（`calibration.py:57-62` 的 `DEVICE_CLASSES`）：
+  ≥150 GiB → 32,768 token / 256 行；≥60 GiB → 16,384 / 128；≥30 GiB → 8,192 / 64；其余 → 4,096 / 32。
+  CPU 与不报显存的设备**不分类**，用 `config.py` 的 65,536 / 8,192（`calibration.py:65-70`）。
+- 再在加载期实测一遍（`calibration.py:134-220`）把它收紧：取效率拐点、延迟上限、显存上限三者。
+  代价是 **ready 晚几秒**（记录：`decision3-lanes-packing.md:142-157`，上游记录）。
+- 只在不显式给 `--max-num-batched-tokens` 且设备有类别时跑（`runtime.py:519-521`）——
+  **运维给了值就不校准**。
+
+**这一处必须与初稿那句话对照着读**：初稿说「这条线上没有任何运行期标定」，
+现在要改成「没有任何运行期标定，加载期多了一次——但它标的只有 `max_num_batched_tokens`」。
+读位置、prompt 布局、温度、阈值**没有**任何一个变成可标定的量：温度仍是包里写死的常数
+（`families/decision1/qwen.py:134`、`families/decision2/family.py:364`），阈值仍是打包的
+operating point（`api/openapi.yaml:1342-1346` 的 `operating_point_sha256`）。
+这正是 §0 第三句话的落点。
+
+### 8.4 默认行为真的变了：合批成了默认
+
+这一节最容易被「只是改名」误导的地方——**默认值换了**：
+
+| | 初稿时 | 现在 |
+|---|---|---|
+| 默认调度 | 每个请求**单独**跑（发布包的批形状） | **并发请求合批**（vLLM 式；`batch_window_ms = 2.0` 默认生效） |
+| Decision 2.0 的共享上下文 | opt-in 档 | **默认开**（`families/decision2/family.py:253-256`） |
+| 「逐字节相同」适用于 | 默认路径 | **只剩 golden 自检的参考前向** |
+
+批规划器是 `scheduler/batching.py`（346 行），它把旧 `profiles/` 的代码吸收进来：
+
+| 函数 | 是什么 | 位置 |
+|---|---|---|
+| `reference()` | **旧 `profiles/exact.py` 的那条路**：每个请求单独一次前向、按发布版的行顺序与切分（`exact_batches`）；**golden 自检专用** | `scheduler/batching.py:60-74` |
+| `merged()` | 批不变模型的共享批，不等待、保持短前向 | `:77-113`、`MERGED_BATCH_TOKENS = 512` `:42` |
+| `coalesced()` | **旧 `profiles/batching.py` 的那条路**：并发请求的行合批，按 lane 分组 | `:116-167` |
+| `SharedContext` | 旧 `profiles/shared_context.py` 整段搬来（类名 `SharedContextProfile`→`SharedContext`，`available()`→`unavailable()`） | `:226-277` |
+
+`Batcher`（`:280-346`）是调度器持有的对象，取代了「按 profile 名字选 plan 函数」。
+旧 `max_speed` 那半套（近似 kernel + 预打包 FP32 副本）没有进 `batching.py`，
+而是并进了 dtype 策略。
+
+**所以下面这句话必须重写**：初稿说「`exact` 必须原样保留发布时的混合批形状」——
+现在**默认路径故意不保留**，保留它的只有 golden 自检的参考前向
+（`runtime.py:497-506` 把 `family.golden` 的请求喂给 `reference()`）。§9.2 的自检因此是
+「**拿发布形状的前向，去比发布时记下的答案**」，而不是「默认路径自证清白」。
+
+### 8.5 为什么参考路径还得按发布批形状跑
+
+机制变了，理由没变。记录里量到批不变性不成立（`docs/records/decision1-parity.md`，上游记录）：
 
 > ROCm：640 行里 0 行相同，max |Δp| 0.08；CPU (MKL)：320 行里 244 行相同，max |Δp| 1.4e-3。
 
-也就是说「把每题的题型单独跑」不是优化，是**换了一套数值**——在 ROCm 上 640 行没有一行逐位相等。
-所以 `exact` 必须原样保留发布时的混合批形状。这条与 Laya §7 的「双向编码器无法复用前缀」
-是同一枚硬币的两面：**批与布局是数值的一部分，不是调度的自由。**
+`vela.py` 里那句 docstring 也跟着改了措辞，但说的还是同一件事
+（现在写 *…so this is for batches that merge requests*，`families/decision1/vela.py:254-256`）。
+`merged()` 之所以能「不等待、答案不变」，前提恰恰是**模型自己批不变**
+（`model.batch_invariant`）——这是 §8.2 里 `numerics` 的第一个条件。
 
-近似档的记录同样是上游记录（`docs/records/decision1-parity.md`）：`batching` 在 ROCm 四个面板上
-Kai 10,253/10,653 逐字节相同、决策变化 0、max |Δp| 9.6e-6；`max_speed` 在 CPU 上
-Kai 70/1,431、决策变化 0、max |Δp| 1.1e-5。
+合批那条路的记录同样是上游记录（`docs/records/decision1-parity.md:315-336`）：
+在 ROCm 四个面板上 Kai 10,253/10,653 逐字节相同、决策变化 0、max |Δp| 9.6e-6；
+预打包副本那条在 CPU 上 Kai 70/1,431、决策变化 0、max |Δp| 1.1e-5。
+
+这条与 Laya §7 的「双向编码器无法复用前缀」仍是同一枚硬币的两面：
+**批与布局是数值的一部分，不是调度的自由。** 变化只在于——这一路现在**主动**去花这笔预算，
+并且把「哪一次前向要逐字节对上」缩到了参考路径那一次。
 
 ---
 
@@ -607,41 +744,54 @@ Kai 70/1,431、决策变化 0、max |Δp| 1.1e-5。
 
 ### 9.1 契约与错误码
 
-`api/openapi.yaml` 是唯一的契约（`API_VERSION = "2.3.0"`，`api/app.py:27`），
-Go 侧的客户端是它的生成产物（`pkg/modelservice/api/openapi.gen.go:3` 的 `DO NOT EDIT`）。
-错误分两层（`errors.py:1-6`）：
+`api/openapi.yaml` 是唯一的契约（`API_VERSION = "3.0.0"`，`api/app.py:27`；初稿时是 `2.3.0`，
+这次升级删掉了 `options.profile`，见 §8.4），Go 侧的客户端是它的生成产物
+（`pkg/modelservice/api/openapi.gen.go:3` 的 `DO NOT EDIT`）。
+错误分两层（`errors.py`）：
 
 - **请求级** → HTTP 状态 + `{"error": {"code", "message"}}`：
   `invalid_request 400` / `model_not_found 404` / `request_too_large 413` /
-  `unsupported_surface 422` / `overloaded 429` / `internal_error 500` / `not_ready 503`（`errors.py:33-41`）。
+  `unsupported_surface 422` / `overloaded 429` / `internal_error 500` / `not_ready 503`
+  （`REQUEST_ERROR_STATUS`，`errors.py:36-44`）。
 - **条目级** → 200 响应里就地标注，不牵连同请求的其他题：
   `invalid_question` / `invalid_input` / `max_length_exceeded` / `scan_budget_exceeded` /
-  `invalid_model_output` / `deadline_exceeded` / `unavailable`（`errors.py:13-31`）。
+  `invalid_model_output` / `deadline_exceeded` / `unavailable`（`QUESTION_ERROR_CODES`，`errors.py:25-33`）。
 
-`RuntimeServiceError.__init__` 会拒绝任何不在表里的 code（`errors.py:47-48`）——
-**新增一个错误码必须先选边。**
+`RuntimeServiceError.__init__` 会拒绝任何不在表里的 code（`errors.py:96`）——
+**新增一个错误码必须先选边。** 媒体被拒时现在多一层结构：`MediaError`（`errors.py:67-83`）
+带上一个固定枚举里的 `reason`（`MEDIA_REASONS`，`errors.py:49-64`：`image_format` / `image_too_large` /
+`video_unsupported` 等）和（破限时）一个 `limit`，契约里的 `ErrorBody` 同步加了这两个可选字段。
+理由是安全：**运行期的 message 可能带本地模型路径或 deployment key**，公开面因此不转发原文（§9.5）。
 
 ### 9.2 加载期 golden 自检：跑不过就不 ready
 
-这是本仓最接近「fail-loud 到骨子里」的地方。`ServedModel._start()`（`runtime.py:402-452`）
+这是本仓最接近「fail-loud 到骨子里」的地方。`ServedModel._start()`（`runtime.py:459-537`）
 在模型装好之后、置 ready 之前，**真的跑一遍 golden 请求**：
 
 ```python
 self.health.set("warming", "running the golden check")
 self.health.golden = golden_check(self.golden_surface, model.golden_compare,
-                                  self.family.golden(self.package),
-                                  placement.device.accelerator)
+                                  goldens, placement.device.accelerator)      # runtime.py:501-506
 if self.health.golden.status == "failed":
     raise VerificationError(self.health.golden.detail or "golden check failed")
 ```
 
-`golden_check` 的容差按设备类别给（`supervision/readiness.py:12-14, 115`）：
+这些请求走的是 §8.4 说的**参考路径**（`scheduler/batching.py:60-74` 的 `reference()`），
+不是默认的合批路径——这是改名之后这份自检仍然有意义的前提。
+
+`golden_check` 的容差按设备类别给（`supervision/readiness.py:12-14`、选择在 `:150`）：
 
 ```python
 GPU_TOLERANCE = 0.02
 CPU_TOLERANCE = 1e-3
 tolerance = CPU_TOLERANCE if device_class == "cpu" else GPU_TOLERANCE
 ```
+
+设备类别这次多了一个：参考值现在按 `cpu` / `rocm` / `cuda` / **`npu`** 四类存
+（`readiness.py:143-144`），`accel/npu.py` 是新接进来的加速器（记录：`docs/records/npu-parity-ascend910b1.md`）。
+**`npu` 没有自己的容差值**——它落到 `readiness.py:150` 的 else 分支，复用 GPU 的 0.02；
+它换来的是另一处让步（`readiness.py:155-174`）：NPU 上两遍前向**允许**在容差内漂移，
+但**两遍各自都要对参考值校验**，别的设备类别只校验第一遍。
 
 golden 请求本身是固定的（`systemone.py:36-58`）——一段固定的 state 加三种题型各一题：
 
@@ -651,22 +801,30 @@ def golden_questions(other):   # domain(choice: code/math/other)、reasoning(nou
 ```
 
 四个 decisions 家族里，Decision 3.0 是唯一的例外：它还要跑第二遍——一个**图像 golden 请求**
-（固定的一段 64×48 PNG data URL，`families/decision3/family.py:72-79`；题目是
-`image_colour`(choice) 与 `image_photo`(noul)，`:80-95`），所以它的参考值是 **5 条**而不是 3 条
-（`family.py:324-341` 是全仓唯一在 golden 上做 `requests +=` 的一处）。上游记录里的 golden 一栏
+（固定的一段 64×48 PNG data URL，`families/decision3/family.py:96-103`；题目是
+`image_colour`(choice) 与 `image_photo`(noul)，`:104-120`），所以它的参考值是 **5 条**而不是 3 条
+（`family.py:348-365` 是全仓唯一在 golden 上做 `requests +=` 的一处，`:356`）。上游记录里的 golden 一栏
 因此写的是 `5 / 5 matched`（`docs/records/decision3-parity.md:62-69`）。
 
 参考值就是 §14 要重算的 `registry/golden_answers_*.json`。**三态而不是两态**：
 
 | 状态 | 含义 | 位置 |
 |---|---|---|
-| `matched` | 与记录值在容差内一致 | `readiness.py:97-144` |
-| `failed` | 超容差 → **`VerificationError`，模型不 ready** | `runtime.py:447-448` |
-| `unverified` | golden 过了，但 kernel choices 没能装上（`unpinned`），所以「无法为发布答案背书」 | `runtime.py:449-452`、`runtime.py:458-475` |
+| `matched` | 与记录值在容差内一致 | `readiness.py:129-197` |
+| `failed` | 超容差 → **`VerificationError`，模型不 ready** | `runtime.py:508-509` |
+| `unverified` | golden 过了，但**无法为发布答案背书** | `runtime.py:498-517` |
 
 `unverified` 这个状态是本仓独有的设计：它承认「我对得上记录，但我不是在发布时那套 kernel 上算的」。
-`runtime.py:461-463` 的注释是原话：*A model whose choices can't be applied still loads,
+`runtime.py:545-546` 的注释是原话：*A model whose choices can't be applied still loads,
 but its golden result says ``unverified``: it can't vouch for the released answers.*
+
+**这次改动给它加了第二个触发条件**，而新增的那个比原来那个更该被注意：
+除了「kernel choices 装不上（`unpinned`，`runtime.py:514-516`）」，
+**`--dtype` 只要不是 `auto` 也会落到 `unverified`**（`runtime.py:498-500`：参考值被清空，
+detail 写 *golden references are recorded at `--dtype auto`, not X*，`:508-511`）。
+这是诚实的：换了精度就不再是「同一套数值」，那条记录也就不能再给答案背书。
+于是 §8.2 的 `numerics` 与这个状态是同一个问题的两种回答——
+前者说「这条路径是近似的」，后者说「连参考值都对不上了」。
 这与 Laya §9 的 `unevaluated`、SemIf-OpenJev 的 `allowed_token_mass`「只上报不参与」是同一类诚实的第三态。
 
 ### 9.3 「绝不截断」与显式的完整性证明
@@ -676,13 +834,13 @@ but its golden result says ``unverified``: it can't vouch for the released answe
   Qwen 路径同理（`segments.py:64-68`，`no truncation`）。
   包侧还有一条硬约束：`packing.state_truncation` 必须是 `"error"`（`vela.py:55-56`）。
 - **一条超长题拖垮整个请求**：`Decision1Model.plan()` 捕到 `MAX_LENGTH_EXCEEDED` 后
-  **给每一道题都写同一条错误、并清空 items**（`model.py:94-104`），
+  **给每一道题都写同一条错误、并清空 items**（`model.py:93-103`），
   而 request 级的 `ValueError` 会变成 400。docstring 把这条列为「bundled runtime 的准入规则」：
   *one over-long question fails every question of the request, nothing is truncated*（`model.py:3-8`）。
 - **`require_full_input`**：opt-in 的完整性契约，成功时在答案上盖 `input_coverage: "complete"`
-  （`plugins/decisions.py:298-303`）。它与 `overflow: truncate` 互斥（`systemone.py:138-139`），
+  （`plugins/decisions.py:302-305`）。它与 `overflow: truncate` 互斥（`systemone.py:138-139`），
   且**只有这个证明能让调用方知道「每个 part 都被完整读过」**——
-  上游 README 第 49-53 行专门警告 *An accepted request or its token usage does not prove that
+  上游 README 第 50-53 行专门警告 *An accepted request or its token usage does not prove that
   every supplied part was read*。
 
 ### 9.4 一个只有机械检查抓得到的坑：多模型共享 GPU 时的 kernel 选择
@@ -699,6 +857,35 @@ but its golden result says ``unverified``: it can't vouch for the released answe
 不是给「跑错了 kernel」留的**。它与 Open-Jev §8 的 `device_map="auto"`（服务照样回 ready，
 并从没加载的模型返回自信的数字）是同一种失效，但这里的检测手段是记录里的 A/B 而非运行期断言。
 
+### 9.5 另一条路：路由器自己的公开 System One 面
+
+§1 已经说过上游有两条路。第二条是 `pkg/systemone/`——**客户端直接打路由器**，
+由路由器转发给某个 deployment 的 runtime。它这次长出三件东西，都值得记：
+
+**① 一个手写的 body 扫描器（`body.go`，305 行）。** 它只从请求体里读出顶层 `model` 与 `options`
+（`scanRequest()`，`pkg/systemone/body.go:32`），**不解码 base64 的图像与视频**——
+媒体原样转发。理由是延迟：绕开 `encoding/json` 的逐字节状态机，
+记录里每个带图/视频的请求省 12–32 ms。同时它数 `options` 的成员个数，重复键判 400。
+注意这件事与 §1 里 `encodeDecisionRequest()` **没有任何关系**：那一个是内部客户端
+**构造** `api.DecisionRequest`，这一个是边缘**扫描**原始 body。
+
+**② 公开面的 options 白名单（`options.go`，65 行）。** 公开面只认
+`deadline_ms` / `max_tokens` / `return_meta` 三个（`options.go:14`），逐个校验类型与取值范围；
+`profile` 被**显式拒绝**并把调用方指向 engine arguments（`options.go:17-20`）。
+于是 §8.4 那次删除在**两个面**上都做了：运行期拒一次（`runtime.py:938-940`）、公开面再拒一次。
+
+**③ 错误码与原因的白名单（`public_errors.go`，102 行）。** 公开面**永不转发运行期的原文**——
+`runtimeFailure()`（`:47-61`）把运行期**文档化的**错误码映射成公开状态码，
+不认识的码就不再是过去那个恒定的 `systemone_request_failed`；媒体被拒时用**自己写的固定措辞**
+配 §9.1 那组 `reason`（`:63-81`）。理由同样写在那儿：运行期的 message 可能带本地模型路径或
+deployment key。另外 429 / 503 现在带 `Retry-After`（`public.go:219-229`）。
+
+**还有一个与本文主线相关的版本闸门。** 路由器现在**只接同一个发布版**的 model runtime
+（`pkg/modelservice/health.go:32-41`）：`RuntimeAPIVersion = "3.0.0"`（`health.go:14`），
+比较是**精确相等**——另一个 `3.x` 也不收。对不上的 runtime，其模型被标成 `incompatible`，
+deployment 永远不 ready，路由器对外报不可用。这与 §8 那次破坏性改名是配套的：
+**契约换了主版本，就不再假装兼容。**
+
 ---
 
 ## 10. 置信度从哪来，又怎么被改写
@@ -713,7 +900,7 @@ but its golden result says ``unverified``: it can't vouch for the released answe
 | decision1（Vela 与 Qwen 共用） | **top-two margin**：`first - second`（截到 [0,1]） | `1 − var/uniform`，uniform = `(k²−1)/12` | 直接报 `P(true)`，无 confidence 字段 | `families/decision1/answers.py:22-39` |
 | decision2 | **`1 − H/log k`**（归一化熵） | **同一条归一化熵** | 同上 | `families/decision2/answers.py:81-83` |
 | vela2 | top-two margin | `1 − var/uniform` | `P(yes)`，可再过一层可选标定 | `families/vela2/answers.py:82-99` |
-| decision3 | **`1 − H/log k`**（与 decision2 同一个函数） | **同一条** | 同上（`noul` = 第 2 个码的值） | `families/decision3/family.py:344-349`、`:363-364`、`:372`、`:378` |
+| decision3 | **`1 − H/log k`**（与 decision2 同一个函数） | **同一条** | 同上（`noul` = 第 2 个码的值） | `families/decision3/family.py:368-373`、`:387-388`、`:396`、`:402` |
 
 decision1 的 docstring 给这套统计起了个名字：`decision_type_aware_v1`（`answers.py:1-8`）。
 **而在 committed 产物上可以直接验证这确实是两条不同的公式**（实测，§14）：
@@ -741,18 +928,18 @@ decision3 的 golden answers：|1 − H/log k − 记录值| 的最大值 = 0
 | 环节 | 在哪 | 改数值？ | 改 argmax？ |
 |---|---|---|---|
 | **训练本身** | 不在本仓（§0 的边界） | 是 | 是 |
-| 温度（decoder 路径与 d3） | `qwen.py:134`、`families/decision3/family.py:681-683`，值来自包 | 是 | 否（单调） |
-| `score_bias`（仅 Decision 2.0 的 score） | `families/decision2/family.py:352-355` | 是 | 不适用（Score 无 argmax，但有期望值与 confidence） |
+| 温度（decoder 路径与 d3） | `qwen.py:134`、`families/decision3/family.py:998-1000`，值来自包 | 是 | 否（单调） |
+| `score_bias`（仅 Decision 2.0 的 score） | `families/decision2/family.py:356-358` | 是 | 不适用（Score 无 argmax，但有期望值与 confidence） |
 | vela2 的 `noul_calibration` | `families/vela2/calibration.py:135-142` | 是 | **可以**（`sigmoid(logit(p)/T + b)` 非单调映射到 [0,1] 后可能跨过 0.5） |
 | vela2 的阈值族 | `calibration.py:70-133` | 是（Set / Span 的选中集合） | **是**（阈值就是 argmax 的替代品） |
 
-三条与另外十七篇不同的性质：
+三条与另外二十一篇不同的性质：
 
 1. **Vela encoder 完全没有标定**（§5.3）。包一带 calibration 就拒载
-   （`families/decision1/package.py:139-140`）。
+   （`families/decision1/package.py:139-140`、`:112` 的 `file_map`）。
 2. **Decision 2.0 的 `score_bias` 是「按等级数查表」的 logit 偏移**：
    `apply_score_bias(offsets, logits, level_count)` 取 `offsets[level_count]` 逐位相加
-   （`families/decision2/answers.py:14-25`），**加法发生在除以温度之前**（`family.py:352-360`）。
+   （`families/decision2/answers.py:14-25`），**加法发生在除以温度之前**（`family.py:356-363`）。
    表本身绑定在 checkpoint 摘要上——`load_score_bias` 要求
    `report["model_sha256"] == model_sha256`（`package.py:285-286`），
    且文件摘要必须同时匹配 `MODEL_MANIFEST.json` 与包内文件（`:273-277`、`:287-289`）。
@@ -795,12 +982,15 @@ Decision 2.0 侧：`families/decision2/package.py:64`、`:67`、`:319-356`。）
    在这一点上它与 Jeff / Open-Jev / Laya / OpenJev(HF) 同侧，与 RYOTIDE 的预先注册判据相反。
 4. **Decision 3.0 是第三种形状，也是最硬的一种**：只有一个 `temperature`，缺省 1.0，
    写在 `decision_config.json` 里（没有 per-type、没有独立标定文件），**而它本身就是身份字段**
-   （`families/decision3/package.py:44-57`、`:194-200`、`family.py:408`）。
+   （`families/decision3/package.py:44-56`、`:194-200`、`family.py:432`）。
    于是「温度」在这四代里的身份依次是：**不许缺的必需件**（D1 decoder）→ **可缺省的标定产物**（D2）→
    **模型身份的一部分**（d3）。§5.3 已列这一条。
 
-温度的实际数值**本文不给**：它们在各模型包的 `config.json` / `MODEL_MANIFEST.json` 里，
-本机没有这些包。§13.2 给出取法，取到之后按上面两张表自查是哪一种形状。
+**温度的实际数值，这次核到了 d3 那一档**：六个 d3 包在各自钉住的 revision 上，
+`decision_config.json` 的 `temperature` **都是 `1.0`**（§16.10 给命令与出处）——
+也就是说第四代发布出来的温度**就是缺省值**，「身份的一部分」这条约束目前没有被用来改数。
+Decision 1.0 / 2.0 / Vela 2.0 那三档仍在各模型包的 `config.json` / 标定文件里，**本文不给**：
+这一轮只核了 d3 那六个仓。
 
 ### 10.4 Go 侧**不用**模型报的那个 `confidence`
 
@@ -810,9 +1000,16 @@ Decision 2.0 侧：`families/decision2/package.py:64`、`:67`、`:319-356`。）
 
 | 动作 | 位置 |
 |---|---|
-| 解码进 `Answer.Confidence` | `pkg/modelservice/client.go:408-409` |
-| 范围校验（必须 ∈[0,1]，否则整条判 `invalid_model_output`） | `pkg/modelservice/answer_check.go:35` |
-| 有限性校验 | `pkg/modelservice/client.go:427-428` |
+| 解码进 `Answer.Confidence` | `pkg/modelservice/client.go:382-384` |
+| **解码期的边界检查**：`confidence`、`probabilities` 的每个值、`spans[].probability` 必须有限且 ∈[0,1]，否则整条改判 `invalid_model_output`；其余字段（非 span 题的 `Noul`、`Score`、`Threshold`）只查有限性 | `pkg/modelservice/client.go:391-425`（`checkedAnswer` / `validAnswerNumbers`） |
+| 范围校验（非 preset 题的 confidence ∈[0,1]） | `pkg/modelservice/answer_check.go:27`（`answerFits`） |
+
+第二行是这次新增的（上游 `77d0220`）。它值得单独点出来，因为它是**判错而不是夹取**：
+越界的答案整条变成 `invalid_model_output`，而不是被截到 [0,1] 再往下走。
+判据写得很直白——*A preset question takes its type from the model;
+checkedAnswer enforces its confidence and probability bounds at decode*
+（`pkg/modelservice/answer_check.go:15-17`）：非 preset 题的边界本来就由 `answerFits` 兜住，
+**preset 题（题型由模型自己报）之前没有这道闸**。**这条改动只动了 Go 侧**，Python 运行时一个字节没改。
 
 而信号里的 confidence 是 Go **自己从 `probabilities` 重算的**
 （`pkg/classification/classifier_signal_decision_model.go:167-200`）：
@@ -830,7 +1027,7 @@ Choice 的从「top-two margin」换成了「选中项的概率」。** 模型�
 
 后果是具体的：如果调用方按文档理解 `confidence` 是「这个答案有多可信」，
 他拿到的数与路由器实际用于门控和排序的数**是两个不同的量**。
-这正是另外十七篇反复立的同一块牌子——Jeff 的 serving rule、Open-Jev 的 `choice_confidence`、
+这正是另外二十一篇反复立的同一块牌子——Jeff 的 serving rule、Open-Jev 的 `choice_confidence`、
 Quyet 的 `confidence = max(p)`、RYOTIDE 的 `margin`——在**同一个系统内部**又出现了一次，
 而且这次是「生产者和消费者各有一套」。
 
@@ -847,14 +1044,16 @@ RYOTIDE §13 的四条，在这一路上的落位**整齐得出乎意料**——
 
 | RYOTIDE §13 不变量 | 在这一路的对应物 | 状态 |
 |---|---|---|
-| **#1** 读位置必须落在标记上（诊断量 `marker_mass`） | 位置是 `render` / `collate` **构造并记录**出来的（`markers` / `endpoints`）；Qwen 路径还有端点互不相同、必须落在 query 之前的显式断言（`segments.py:88-91`）。d3 不是记录出来的、而是「渲染出来的那条 prompt 的第 `width-1` 位」（`families/decision3/family.py:632`、`:659-668`） | **结构性成立**；诊断量换成「端点合法性断言」而不是质量占比。**没有任何质量占比类的诊断量**——前三代里候选不是从词表里挑的（§5.1）。**第四代仍然没有，但这次是「可以有没有」**：d3 的未用码上的读出质量本可量出来，是掩码前置把它压成了 0（§16.4） |
+| **#1** 读位置必须落在标记上（诊断量 `marker_mass`） | 位置是 `render` / `collate` **构造并记录**出来的（`markers` / `endpoints`）；Qwen 路径还有端点互不相同、必须落在 query 之前的显式断言（`segments.py:88-91`）。d3 不是记录出来的、而是「渲染出来的那条 prompt 的最后一个 token」：左填充时是 `width - 1`（`families/decision3/family.py:834`），打包时是**各行累计末位**（`:816-820`） | **结构性成立**；诊断量换成「端点合法性断言」而不是质量占比。**没有任何质量占比类的诊断量**——前三代里候选不是从词表里挑的（§5.1）。**第四代仍然没有，但这次是「可以有没有」**：d3 的未用码上的读出质量本可量出来，是掩码前置把它压成了 0（§16.4） |
 | **#2** 前缀与标记表面形式耦合，必须成对扫 | 标记是 token **id**（Vela 的 `mask_token`、Vela 2.0 的 `marker_ids`），不存在「表面形式」这个自由度。**d3 的码反过来有表面形式**：码被逐行写进 prompt（`prompt.py:81`），还被要求单 token 化且 id 与包声明一致（`prompt.py:162-166`） | **前三代不适用**（与 Laya 同侧）；Vela 2.0 还多一条：`marker_ids` 的名字必须**恰好**是那八个（`encoder_layout.py:105-108`）。**第四代适用**——但代价不同：码不对就是包对不上，不是退化 |
-| **#3** 只读最后一个位置 | Vela 读 K 个 `[marker]`；Qwen 读 K 个端点 + 1 个 query；Vela 2.0 读每题若干标记；**d3 真的只读最后一个位置**（每题 1 个，`family.py:632`、`:659-668`） | **改写**：不是「只读一个位置」，而是「一次前向只读构造出来的那些位置」——**只有 d3 例外，它就是读末位**。**「不物化词表维度」四代都成立**：候选头输出 `[rows, width]`、Vela scorer 输出标量、d3 的读出宽度是包自带的 255 而不是词表（§16.4） |
+| **#3** 只读最后一个位置 | Vela 读 K 个 `[marker]`；Qwen 读 K 个端点 + 1 个 query；Vela 2.0 读每题若干标记；**d3 真的只读最后一个位置**（每题 1 个，`family.py:816-820`、`:834`） | **改写**：不是「只读一个位置」，而是「一次前向只读构造出来的那些位置」——**只有 d3 例外，它就是读末位**。**「不物化词表维度」四代都成立**：候选头输出 `[rows, width]`、Vela scorer 输出标量、d3 的读出宽度是包自带的 255 而不是词表（§16.4） |
 | **#4** 比较概率 / ECE 前先确认 temperature | 温度**逐 runtime 不同**：Vela 无温度、Qwen 必有、vela2 在 `calibration.json` 里还有阈值族、**d3 的 T 在 `decision_config.json` 里且参与身份哈希**（§5.3） | **成立，但要确认的不止 T**：还要确认**是哪一套 `confidence` 公式**（§10.1：四代共三条公式，d2 与 d3 共用一条）与**Go 侧用的是哪一个数**（§10.4） |
-| （各自新增） | **profile 是数值的一部分** | 同一个模型四档：`exact` 目标逐字节相同，另三档是近似的（§8）。跨实现引用延迟或概率前，先确认跑的是哪一档 |
+| （各自新增） | **engine arguments 是数值的一部分，`numerics` 是它的结论** | 五个调度参数（含 `dtype`）决定这条路径是 `exact` 还是 `approximate`；**逐字节相同只属于 golden 的参考前向**（§8）。跨实现引用延迟或概率前，先确认那台机器上跑的是哪一组参数 |
+| （各自新增） | **默认值也是数值的一部分** | 这条改动里最容易被「只是改名」盖过的一点：**合批成了默认、Decision 2.0 的共享上下文默认开**（§8.4）。同一个包，默认与 opt-in 给出的是两套数 |
 | （各自新增） | **标定产物必须绑权重哈希** | Decision 2.0 的 `score_bias` 报告里带 `model_sha256`，与 checkpoint 不符即拒载（`families/decision2/package.py:285-286`） |
 | （各自新增） | **多模型同进程的 kernel 选择是全局状态** | 一张 GPU 上多个模型共用一个进程时，autotuner 的选择是进程级的；选错会改答案且**照样通过 golden 自检**（§9.4） |
-| （各自新增） | **同一个批里「共享」与「不共享」可以并存** | d3 的图像请求让**每道题各带一份图**过一遍视觉塔（同一批里同一份图被重复算），只有这一批里**有视频**时才把图像与视频特征各算一次、全批复用（`families/decision3/family.py:8-13`、`:635-658`、`:687-709`）。开关是「这批有没有视频」，不是配置（§16.6） |
+| （各自新增） | **同一个批里「共享」与「不共享」可以并存** | d3 的图像请求让**每道题各带一份图**过一遍视觉塔（同一批里同一份图被重复算），只有这一批里**有视频**时才把图像与视频特征各算一次、全批复用（`families/decision3/family.py:8-13`、`:841-864`）。开关是「这批有没有视频」，不是配置（§16.6） |
+| （各自新增） | **「另一种调度」与「另一种数值」是两件事，但可以同时发生** | 这次加的 lanes / 打包 / 合批把两者叠在一起：lane 划分与批上限**只是调度**，而**合并前向**里那一次 packed 视觉塔调用与「每行一份拷贝」**算的不是同一批数**（§16.8）。记录把两者分开量：调度那一半给出 99.69% 的 argmax 一致，数值那一半才需要容差 |
 
 ---
 
@@ -864,37 +1063,43 @@ RYOTIDE §13 的四条，在这一路上的落位**整齐得出乎意料**——
 |---|---|---|
 | `src/model-runtime/vllm_srun/systemone.py` | 271 | System One 的请求语义：题型、选项上限、state / question 校验。**四个 decisions 家族共用的唯一一层**（`families/decision1` / `decision2` / `decision3` / `vela2` 都从这里 import 校验） |
 | `…/families/decision1/family.py` | 305 | Decision 1.0 家族：包校验、两条 runtime 的分派、golden 请求 |
-| `…/families/decision1/model.py` | 268 | `Decision1Model` 与两条子类：`plan`（含「一题超长拖垮全请求」）、`run`、`run_approximate` |
+| `…/families/decision1/model.py` | 267 | `Decision1Model` 与两条子类：`plan`（含「一题超长拖垮全请求」）、`run`、`run_approximate` |
 | `…/families/decision1/vela.py` | 332 | `vela-encoder`：prompt 布局、`[marker]` 位置、8 题物理批、三题型层堆、长度分组读出 |
 | `…/families/decision1/qwen.py` | 150 | `qwen3.5-decision`：`prompt_version`、8 题物理批（32 对齐）、`softmax(logits/T)` + host 重归一化 |
 | `…/families/decision1/answers.py` | 78 | 概率 → typed answer：`decision_type_aware_v1` 的两条 confidence 公式、±2e-5 的自洽校验 |
 | `…/families/decision1/questions.py` | 107 | question / preset → `Row`，Noul 的默认描述，`MAX_QUESTIONS = 1024` |
 | `…/families/decision1/package.py` | 304 | 包格式 `vllm-sr-decision/1`：文件图、逐文件 SHA-256、温度（常数或 per-type 文件）、`QUESTIONS.json` 预设 |
-| `…/families/decision2/family.py` + `package.py` + `answers.py` | 364 + 401 + 95 | Decision 2.0：共享候选头、LoRA/适配器打包、`score_bias` 绑哈希、归一化熵 confidence |
-| `…/families/vela2/*` | ~3 600 | Vela 2.0：8 个标记的布局、窗口读、Set / Span、阈值族与 PII 规则 |
-| `…/families/decision3/family.py` | 721 | Decision 3.0 家族：包校验、第四套读出（255 路码表 + 末位）、请求顺序 8 题一批、图像/视频特征复用 |
+| `…/families/decision2/family.py` + `package.py` + `answers.py` | 368 + 401 + 95 | Decision 2.0：共享候选头、LoRA/适配器打包、`score_bias` 绑哈希、归一化熵 confidence；**`shared_context_default = True`**（`:255`） |
+| `…/families/vela2/*` | 3 239 | Vela 2.0：8 个标记的布局、窗口读、Set / Span、阈值族与 PII 规则 |
+| `…/families/decision3/family.py` | 1 061 | Decision 3.0 家族：包校验、第四套读出（255 路码表 + 末位）、**lane 划分与合并前向**、图像/视频特征复用与缓存（§16.8） |
+| `…/families/decision3/cache.py` | 72 | **新增**：媒体（主机侧）与视觉特征（设备侧）的 LRU 缓存，各自带字节上限（§16.8） |
 | `…/families/decision3/prompt.py` | 166 | 第四代的 prompt 与码表契约：硬编码的 chat 格式（思考段闭合）、模板按 SHA-256 认脸、Qwen2 预分词正则、码必须单 token |
 | `…/families/decision3/package.py` | 417 | 包格式 `d3-package-manifest/1`：255 个码与 token id、`model_identity` 重算、readout 形状 `[255, hidden]` |
-| `…/families/decision3/images.py` + `videos.py` | 228 + 370 | Qwen2-VL 图像处理器与 Qwen3-VL 视频处理器（OpenCV 解码、2 fps、4–32 帧、逐帧像素预算） |
+| `…/families/decision3/images.py` + `videos.py` | 282 + 405 | Qwen2-VL 图像处理器与 Qwen3-VL 视频处理器（OpenCV 解码、2 fps、4–32 帧、逐帧像素预算）；媒体现在在**独立进程**里解码（`…/media.py`，150 行） |
+| `…/scheduler/batching.py` | 346 | **取代 `profiles/`**：参考 / 合并 / 合批三条计划与 `SharedContext`（§8.4） |
+| `…/scheduler/calibration.py` | 273 | **新增**：按显存分档 + 加载期实测，定 `max_num_batched_tokens`（§8.3） |
+| `…/engines/native/models/packed.py` | 212 | **新增**：打包前向（一行装多段、行内累计末位），合并批专用（§16.8） |
 | `src/model-runtime/tests/test_decision3_reference.py` | 218 | 与 Transformers 5.17 `Qwen3_5Model` 的**逐字节**对照（文本、图、视频，含剪枝骨干） |
 | `…/heads/typed.py` | 119 | Vela 的题型头：题型嵌入 + 2 层 pre-norm Transformer + MLP scorer，强制 FP32 |
 | `…/heads/candidate.py` | 105 | 共享候选头（Decision 2.0 全部 + Decision 1.0 decoder），双线性 + 门控 MLP |
 | `…/heads/marker.py` | 84 | Vela 2.0 的标记头：cosine / mlp / both 三种读出 |
-| `…/text/segments.py` | 105 | 分段的「候选端点 + 全局 query」布局，被 Decision 1.0 decoder 与 Decision 2.0 共用 |
-| `…/plugins/decisions.py` | 338 | `decisions` surface：`plan` / `answer` 契约、`states` 拆分与合并、golden 比较 |
-| `…/plugins/base.py` | 991 | 引擎与家族的抽象：`ForwardBatch`（`gather` / `query` / `shared_prefix`）、`TreeBatch`、`Profile` |
-| `…/runtime.py` | 1 360 | 进程级运行时：加载 → 校验 → 装 profile → **golden 自检** → ready；`output_tokens: 0` 在这里 |
-| `…/supervision/readiness.py` | — | `golden_check` 与两个容差（CPU 1e-3 / GPU 0.02） |
-| `…/profiles/exact.py` `batching.py` `max_speed.py` `shared_context.py` | 109 / 58 / 56 / 128 | 四档数值语义 |
-| `…/api/openapi.yaml` + `app.py` | 1 539 + 289 | 唯一契约；`/v1/decisions` 与 `/v1/systemone` 是同一条路由 |
+| `…/text/segments.py` | 104 | 分段的「候选端点 + 全局 query」布局，被 Decision 1.0 decoder 与 Decision 2.0 共用 |
+| `…/plugins/decisions.py` | 341 | `decisions` surface：`plan` / `answer` 契约、`states` 拆分与合并、golden 比较、媒体拒绝的 `MediaError` |
+| `…/plugins/base.py` | 1 021 | 引擎与家族的抽象：`ForwardBatch`（`gather` / `query` / `shared_prefix`）、`TreeBatch`、`LoadedModel.lane()` |
+| `…/runtime.py` | 1 409 | 进程级运行时：加载 → 校验 → **参考路径 golden 自检** → 标定批上限 → ready；`output_tokens: 0` 在这里 |
+| `…/supervision/readiness.py` | 197 | `golden_check` 与两个容差（CPU 1e-3 / GPU 0.02 / NPU 复用 GPU 档）；四个设备类别 |
+| `…/api/openapi.yaml` + `app.py` | 1 565 + 289 | 唯一契约（`info.version` 与 `API_VERSION` 都是 **3.0.0**）；`/v1/decisions` 与 `/v1/systemone` 是同一条路由 |
+| `…/config.py` | 273 | **`EngineArgs` 的家**（`config.py:43-66`）与逐模型覆盖的合并规则 |
 | `…/registry/tables/decision1.py` `decision2.py` `vela2.py` `decision3.py` | 192 / 78 / 123 / 174 | 每个发布模型的 revision、逐文件 SHA-256、参数量、kernel choices |
 | `…/registry/golden_answers_decision1.json` 等 | — | **committed 的加载期参考值**，也是本文 §14 的唯一数据源 |
-| `src/semantic-router/pkg/modelservice/client.go` | — | Go 侧的 HTTP 客户端（契约生成）；`encodeDecisionRequest` / `decodeAnswer` |
-| `…/pkg/modelservice/answer_check.go` | — | Go 侧的一致性校验（Σp 容差 **0.02**，比 Python 侧的 2e-5 宽五个数量级） |
-| `…/pkg/classification/classifier_signal_decision_model.go` | — | state = 请求原文；typed answer → 信号；**fail-open** |
+| `src/semantic-router/pkg/modelservice/client.go` | — | Go 侧的 HTTP 客户端（契约生成）；`encodeDecisionRequest`（`:175`）/ `decodeAnswer`（`:345`）/ `checkedAnswer`（`:391-425`） |
+| `…/pkg/modelservice/answer_check.go` | — | Go 侧的一致性校验（Σp 容差 **0.02**，比 Python 侧的 2e-5 宽五个数量级）；`:27` 的 `answerFits` |
+| `…/pkg/classification/classifier_signal_decision_model.go` | — | state = 请求原文；typed answer → 信号；**fail-open**。**这次没有改动** |
 | `…/pkg/decision/engine.go` | — | 消费信号与 confidence：AND/OR 聚合、可比池、排序 |
+| `…/pkg/systemone/body.go` `options.go` `public_errors.go` | 305 / 65 / 102 | **新增**：路由器公开 System One 面的 body 扫描、options 白名单与错误码映射（§9.5） |
+| `…/pkg/modelservice/health.go` | — | **同发布版**闸门：`RuntimeAPIVersion = "3.0.0"`，精确相等（§9.5） |
 | `tools/calibration/systemone_auto/*` | ~3 000 | 拿 JevBench 做闭环评测与级联门标定（§15） |
-| `src/model-runtime/docs/records/decision1-parity.md` `decision1-performance.md` `decision3-parity.md` | — | **上游记录**的 parity / 性能数字，本文凡引用都注明（`decision3-parity.md` 共 160 行，六个 d3 包 × 文本/图/视频的逐字节一致率） |
+| `src/model-runtime/docs/records/decision1-parity.md` `rocm-mi325x-batching.md` `decision3-parity.md` `decision3-batching.md` `decision3-lanes-packing.md` `decision3-device-memory.md` `npu-parity-ascend910b1.md` | — | **上游记录**的 parity / 性能数字，本文凡引用都注明（`decision3-parity.md` 共 160 行，六个 d3 包 × 文本/图/视频的逐字节一致率；三份新的 `decision3-*.md` 见 §16.8） |
 
 ---
 
@@ -995,6 +1200,12 @@ decision3 (n=36): |1-H/log k - recorded| = 0.0  |margin - recorded| = 0.21762069
 decision3: Σp 精确为 1 的 35/36，最大偏差 1.110e-16；值不是 float32 的 120/120
 ```
 
+**这一段在改名之后逐字重跑过，六个数字一个不差。** 值得说明为什么它没变：
+`registry/golden_answers_decision3.json` 在 `61677a4..7313c64` 区间里**没有被改**
+（改的是 `golden_answers_vela1.json` / `vela2.json`），`families/decision3/package.py` 与 `prompt.py`
+也整个没动——这次改的是**调度**（§16.8），不是**读出**。所以本文所有「用 committed 产物重算」
+得到的数字**不需要修订**：它们是读出链的恒等式，而读出链没变。
+
 四条结论都由此得到：§10.1 的「隔一代换一条 confidence 公式」（0 对 0.2818）、
 §5.2 的「encoder 不重归一化、decoder 重归一化」（和与 float32 可表示性两个角度同时命中）、
 §5.1 的「候选概率就是设备侧 softmax 的原始输出」，
@@ -1023,13 +1234,14 @@ curl -s localhost:8100/v1/decisions -H 'content-type: application/json' -d '{
 
 看四件事：
 
-- `usage.output_tokens` **必须是 0**——值来自 `runtime.py:961-963` 的硬编码，不是模型报的；
-- `usage.input_tokens` 是**逐题累计**的，即使你开了 `shared_context`（§7.4）；
+- `usage.output_tokens` **必须是 0**——值来自 `runtime.py:1020` 的硬编码，不是模型报的；
+- `usage.input_tokens` 是**逐题累计**的，即使你开了共享上下文（§7.4）；
 - `GET /health` 的 `golden` 必须是 `matched`——**跑不过它模型根本不会 ready**（§9.2）；
-- `GET /v1/models` 里有 `profiles` 与 `golden` 状态；请求体里加 `"options": {"return_meta": true}` 时
-  响应会带 `meta.model_sha256` / `meta.profile` / `meta.numerics`，这是确认「你跑的到底是哪一档」的
-  唯一途径。同一处还能逐请求换档：`"options": {"profile": "shared_context"}`（`runtime.py:895-901` 校验
-  它必须是已装载的那几档之一）。
+- `GET /v1/models` 里报的是 **`engine_args`** 与 `numerics`（不再是 `profiles`）；
+  请求体加 `"options": {"return_meta": true}` 时响应带 `meta.model_sha256` / `meta.dtype` /
+  `meta.numerics`——**这是确认「这台机器跑的到底是哪一套数」的唯一途径**。
+  **注意这里不能再逐请求换档了**：`"options": {"profile": …}` 会被当**已删除的选项**直接拒
+  （`runtime.py:163-171` 的表 + `:938-940` 的拦截），要换档得在**部署时**给 engine arguments（§8.4）。
 - **Decision 3.0 再多看一处**：`GET /v1/models` 里那个模型的 `modalities` 与 `limits` 会多出图像/视频那一组
   （`image_max_pixels`、`image_max_bytes`、`video_fps`、`video_max_frames`、`video_max_tokens`…，
   `families/decision3/family.py:278-295`）——**这是确认「这个包到底读不读视频」的唯一途径**：
@@ -1045,7 +1257,9 @@ python3 tools/golden_answers.py vllm-sr/Decision-2.0-Kai-0.6B --device cpu
 
 **本文没有给出任何前向产生的概率数值。** 本机没有这些模型包（`vllm-sr/Decision-1.0-*` 等），
 §14 的所有数字都来自 committed 的 golden answers 及其重算，
-§8/§9.4 的数字来自 `src/model-runtime/docs/records/` 里上游记录的实测。
+§8/§9.4/§16.8 的数字来自 `src/model-runtime/docs/records/` 里上游记录的实测。
+§16.10 另有一类：**按钉住的 revision 取到的小文件与 `safetensors` 头部**——
+那是包内声明与容器形状，同样不是前向产生的数。
 
 ---
 
@@ -1138,7 +1352,7 @@ Lux-9B     0.674865                                               （四条 qwen
 
 同一条记录里还有两条 noul：`reasoning` = 0.807952、`image_photo` = 0.010114
 （`golden_answers_decision3.json:41-48`），按默认阈值 0.5 一「是」一「否」。
-另外，那张固定的 64×48 PNG（粉到绿的渐变，`families/decision3/family.py:71-79`）
+另外，那张固定的 64×48 PNG（粉到绿的渐变，`families/decision3/family.py:96-103`）
 在六个尺寸上给出的 `choice` **并不一致**：d3 / d3-flash / d3-mini / d3-nano / d3-edge
 五个都答 `other`（confidence 0.333–0.674），只有 **d3-lite 答 `green`**（0.391）——
 同一张图、同一道题、同一条读法，换权重就换答案（§14.3 的同一结论，跨到第四代）。
@@ -1159,7 +1373,7 @@ Lux-9B     0.674865                                               （四条 qwen
 
 ## 15. 它拿 JevBench 做了什么
 
-另外十七篇都在**被 JevBench 评**。这一路多了一层：它还**拿 JevBench 反过来标定自己的决策门**。
+另外二十一篇都在**被 JevBench 评**。这一路多了一层：它还**拿 JevBench 反过来标定自己的决策门**。
 代码在 `tools/calibration/systemone_auto/`（约 3 000 行，纯标准库 + 一个 Go 小工具）。
 
 ### 15.1 钉死的上游
@@ -1217,7 +1431,8 @@ Open-Jev 的 `choice_confidence`、Laya 的 clamp 注释），这里是第五处
 - **不引用任何质量数字**：上游 README 明说 *The initial quality–cost target remains an experiment,
   not a claimed result*，而仓里也没有 committed 的 JevBench 结果文件。
 - **不把 `THRESHOLD` 当成可移植的常数**：README 说 *A different serving profile or dataset
-  calls for fresh validation*，而 §8 已经证明 profile 会改数值——**换 profile 就等于换一套标定。**
+  calls for fresh validation*（这句话在 README 里还在，只是旁边的词换成了 dtype / numerics），
+  而 §8 已经证明**调度参数会改数值**——**换一组 engine arguments 就等于换一套标定。**
 - **不把 231 条当成完整榜**：README 说的是 *This is a public-suite evaluation; it is **not** the full
   official v1.6.1 Intelligence, Capability or Composite leaderboard score.*
 
@@ -1225,11 +1440,19 @@ Open-Jev 的 `choice_confidence`、Laya 的 clamp 注释），这里是第五处
 
 ## 16. Decision 3.0：第四代读法，读末位、按包里那 255 个码
 
-`families/` 下四个 decisions 家族里，`decision3` 是第四个（5 个模块 1 902 行：`family.py` 721、
-`package.py` 417、`videos.py` 370、`images.py` 228、`prompt.py` 166）。它不是前三代任何一套读法的变体——
+`families/` 下四个 decisions 家族里，`decision3` 是第四个（初稿时 5 个模块 1 902 行，
+现在是 **6 个模块 2 403 行**：`family.py` **1 061**、`package.py` 417、`videos.py` **405**、
+`images.py` **282**、`prompt.py` 166、`cache.py` **72 新增**）。它不是前三代任何一套读法的变体——
 **读出这一环是新的一套**；但它的 `confidence` 又回到第二代那一个（§16.5）。
-这一节就是把「新的是哪一半、旧的是哪一半」分开说。以下所有数值都来自 committed 的
-`registry/golden_answers_decision3.json` 与 `docs/records/decision3-parity.md`，**本文没有跑过 d3 的前向**。
+这一节就是把「新的是哪一半、旧的是哪一半」分开说。
+
+**并且要把「读出」与「调度」分开看**：初稿写完之后 d3 变的那 414 行几乎全在**调度**上
+（缓存、lane、打包、跨请求合批），**读出那一环逐字未动**（§16.8）——
+这也是本文 §13.1 的六个重算数字一个都没变的原因。
+
+以下所有数值有三类来源，逐条都标了：committed 的 `registry/golden_answers_decision3.json`
+（§14.5）、`docs/records/decision3-*.md` 里的**上游记录**（§16.8）、以及**按钉住的 revision
+从 Hugging Face 取到的包内声明与 `safetensors` 头部**（§16.10）。**本文没有跑过 d3 的前向。**
 
 ### 16.1 六个包，钉在表里；包里那套 Python 一个字节都不取
 
@@ -1244,9 +1467,9 @@ Open-Jev 的 `choice_confidence`、Laya 的 clamp 注释），这里是第五处
 
 身份是两个摘要：`MODEL_MANIFEST.json` 自己的 SHA-256，加上一个**重算出来的** `model_sha256`
 （权重 + readout + tokenizer + chat template 的逐文件哈希，加上 `decision_config.json` 的推理字段，
-`package.py:124-132`、`:359-371`）。`INFERENCE_FIELDS` 里装着 `codes` / `token_ids` / `temperature` /
-`attention_mode` / `pooling` / `max_length` / `readout_dtype`（`:44-57`）——**改一个码表或一个温度，
-就是改一个模型的身份**（§5.3、§10.3）。
+`package.py:124-132`、`:359-371`）。`INFERENCE_FIELDS`（`:44-56`）一共十二项，本文初稿只列了其中七项——漏掉的是
+`format_version` / `format_id` / `prompt` 与 **`base_model` / `revision`**（后两项见 §16.10）——
+**改其中任何一项，包括改基座声明，就是改一个模型的身份**（§5.3、§10.3）。
 
 ### 16.2 标签集是**包声明的**：恰好 255 个码，每个都得是单 token
 
@@ -1264,7 +1487,7 @@ Open-Jev 的 `choice_confidence`、Laya 的 clamp 注释），这里是第五处
 选项文本本身的渲染沿用 System One 的语义：Choice 是 `key` 或 `key: 描述`、Noul 是 false 在前 true 在后
 （默认 `No / false`、`Yes / true`）、Score 是等级文本（`prompt.py:29`、`:55-66`；
 `family.py:431-464` 还要求等级互异且非空）。题型仍是 `choice` / `noul` / `score`，
-走的是同一个 `systemone.read_question`（`family.py:55`、`:435`），而题型集仍声明为三种（`:152`、`:304`），
+走的是同一个 `systemone.read_question`（`family.py:55`、`:435` 一带），而题型集仍声明为三种（`:152`、`:304`），
 没有 Set / Span。
 
 ### 16.3 读位置：一条 prompt，读**最后一个位置**
@@ -1289,17 +1512,29 @@ Open-Jev 的 `choice_confidence`、Laya 的 clamp 注释），这里是第五处
 上游记录说这不是洁癖：同一批 3 000 条对抗文本上，这样建的 tokenizer 与 Transformers 5.17 一致
 3 000/3 000，而**只用 `tokenizer.json` 差了 2 681 条**（`docs/records/decision3-parity.md:86-90`，上游记录）。
 
-前向是**左填充**（`ids[row, width-len:] = …`），`gather` 与 `query` 取的都是 `width - 1`
-（`family.py:623-632`、`:659-668`）——即这道题 prompt 的最后一个 token。一题一条 prompt，
-请求顺序每 8 题一次前向（`BATCH_SIZE = 8`，`:65`、`:422-427`），`shared_context` 直接返回 0（`:419-420`），
-即**不参与树模式**（§7.2）。全注意力层按包声明的 `attention_mode` 看整条左填充 prompt，
-Gated DeltaNet 层保持因果（`engines/native/models/qwen3_5.py:1-9`、`:375`；代码缺省值是 `causal`，
-`package.py:188`）。长度超限时**只废掉自己那一道题**（错误记进 `errors[question_id]`，
-`family.py:500-512`），不像 Decision 1.0 那样一题超长拖垮全请求（§9.3）。
+读位置本身没变，但**算出这个位置的布局这次多了一种**（§16.8）。两种都读「这道题 prompt 的最后一个
+token」，只是位置怎么算不同：
+
+| 布局 | 怎么放行 | 读哪一位 | 位置 |
+|---|---|---|---|
+| 左填充（初稿里唯一的一种） | `ids[row, width-len:] = …` | `width - 1` | `family.py:822-834` 的 `_padded`（在 `:834` 造 `torch.full((rows,), width - 1)`） |
+| **打包**（合并批专用） | 各行**背靠背**放进一条 `[1, T]` | 各行**累计末位** | `family.py:816-820` 的 `_packed` |
+
+`gather` 与 `query` 都吃这两个量之一（`family.py:975-985` 的 `ForwardBatch`）。
+一题一条 prompt；`shared_context` 仍直接返回 0（`family.py:481-482`），即**不参与树模式**（§7.2）。
+全注意力层按包声明的 `attention_mode` 看整条 prompt，Gated DeltaNet 层保持因果
+（`engines/native/models/qwen3_5.py:1-9`、`:375`；代码缺省值是 `causal`，`package.py:188`）——
+**六个发布包声明的都是 `noncausal_full_attention`**（§16.10 核到）。长度超限时**只废掉自己那一道题**
+（错误记进 `errors[question_id]`，`family.py:528-602` 的 `_plan`），不像 Decision 1.0 那样
+一题超长拖垮全请求（§9.3）。
+
+初稿在这里写的「请求顺序每 8 题一次前向」**已经不再是服务路径**：`BATCH_SIZE = 8`（`family.py:79`）
+现在只被 `exact_batches`（`:484-489`）用，而它只喂 golden 的参考路径（§16.8）。
 
 ### 16.4 读出、掩码与 softmax：**第四套读法**
 
-读出不是 `heads/` 里那三种头之一，而是包里的一个线性层（`family.py:672-685`）：
+读出不是 `heads/` 里那三种头之一，而是包里的一个线性层（`family.py:966-1002` 的 `_readout`，
+语句与初稿时**逐字相同**，只是从 `_pass` 里抽了出来）：
 
 ```python
 hidden = output.query                                   # [rows, hidden]，即最后一列
@@ -1319,7 +1554,7 @@ return [row[: len(item.keys)] for row, item in zip(probs.cpu().tolist(), items)]
    只是它们不是这道题的选项。这是四代里最接近 RYOTIDE「把非标记位置打成 `-inf`」的一次。
 3. **softmax 在 255 路上做，之后才切前 k 个。** 因为 `-inf` 的指数恰好是 0，切出来的 k 个与直接对
    k 个做 softmax **逐位相同**——这是形状差异，不是数值差异。紧接着 `product_answer()` 在 **host 上
-   float64 再归一化一遍**（`:361-362`），与 §5.2 里 decoder 那一侧同侧（实测见 §13.1、§14.5）。
+   float64 再归一化一遍**（`:385-386`），与 §5.2 里 decoder 那一侧同侧（实测见 §13.1、§14.5）。
 
 **没有 `marker_mass` 类的诊断量，但这一次是「本可以有的」。** 未用码上的读出质量本可以量出来——
 只要在掩码**之前**对 255 路做一次 softmax；发布的路径没有这一步，掩码前置把那个量恒久地压成了 0。
@@ -1327,11 +1562,11 @@ return [row[: len(item.keys)] for row, item in zip(probs.cpu().tolist(), items)]
 
 ### 16.5 `confidence`：第四代用的是**第二代那一套**
 
-`_confidence()` 在 `family.py:344-349`：`1 − H/log k`，截到 [0,1]，`k ≤ 1` 时返回 1.0——
+`_confidence()` 在 `family.py:368-373`：`1 − H/log k`，截到 [0,1]，`k ≤ 1` 时返回 1.0——
 与 `families/decision2/answers.py:81-83` 是**同一条公式**（d3 把它抽成了一个函数，
 并多写了一条 `k ≤ 1` 的边界；decision2 那边是两句内联语句，没有这条边界）。
-Choice 与 Score 都走它（`:372`、`:378`），Noul 依旧只报第 2 个码的值、不带 `confidence`
-（`:363-364`）。在 committed 的 golden answers 上可以逐位验证（**实测**，§14.5）：
+Choice 与 Score 都走它（`:396`、`:402`），Noul 依旧只报第 2 个码的值、不带 `confidence`
+（`:387-388`）。在 committed 的 golden answers 上可以逐位验证（**实测**，§14.5）：
 
 ```
 36 条 choice / score 分布：max |1 − H/log k − 记录值| = 0.0
@@ -1359,19 +1594,155 @@ Choice 与 Score 都走它（`:372`、`:378`），Noul 依旧只报第 2 个码�
   再由 FP32 读出打分（`:36-60`、`:110-118`）。也就是说：**前三代对的是「包自己的 Python」，
   第四代对的是「Transformers + 包自己的钩子」——逐字节的目标没变，参考物变了。**
 - **模态怎么落位**：图像请求里视觉塔**每道题各跑一遍**（每题带一份图），
-  只有这一批里**有视频**时才把图像与视频特征各算一次、全批复用（`family.py:8-13`、`:635-658`、`:687-709`）。
+  只有这一批里**有视频**时才把图像与视频特征各算一次、全批复用
+  （`family.py:8-13`、`:841-864`；这是**请求自己那次前向**的规则，合并前向另有规则，见 §16.8）。
   这些在 Go 侧走不到：生成契约里有 `Images` / `Videos` 字段（`api/openapi.gen.go:387-396`），
   但 `encodeDecisionRequest()` 填的 body 只有 `Model / State / Questions / Options`
-  （`pkg/modelservice/client.go:209-214`）——**图与视频这条链只有公共 API（或 Engine 模式）走得到，
+  （`pkg/modelservice/client.go:184-188`）——**图与视频这条链只有公共 API（或 Engine 模式）走得到，
   Go 路由器的 decision 信号一个字节都不带**（与 §10.4 是同一块牌子：能力在，消费者不在）。
 
-### 16.7 这一节没核实的两件事
+### 16.7 初稿里两条「未核实」，这次核到了
 
-- **readout 的宽度（= `hidden_size`）与参数拆分未核实。** 本机没有这六个包，而
-  `loaded_parameters` 里 `text / vision / readout` 各占多少只能从 `MODEL_MANIFEST.json` 读
-  （`package.py:379-390` 要求三者之和等于它）；仓里只有那个总和。
-- **码表的内容未核实。** 包里那 255 个 `codes` 字符串长什么样、是不是字母码，仓里读不到——
-  仓里只有对它的**校验**（255 个、互异、单 token 化、id 与声明一致，§16.2）。
+初稿把下面两条挂在「本机没有这六个包」上。**这次按钉住的 revision 取了几个小文件与 `safetensors`
+头部，两条都有答案了**（命令与完整表格在 §16.10，来源标「包内声明」）：
+
+1. **readout 的宽度就是 backbone 的 `hidden_size`，六个包各不相同。**
+   `readout.safetensors` 的头部给出形状**恰好是 `[255, hidden]`、dtype `F32`**：
+   d3 `[255, 5120]`、d3-flash `[255, 4096]`、d3-mini `[255, 2560]`、d3-nano `[255, 2048]`、
+   d3-lite `[255, 1024]`、d3-edge `[255, 1024]`；而每个包的 `config.json` 里
+   `text_config.hidden_size` 与之一一相等。于是 `package.py:270-283` 那条「必须恰好是
+   `[255, hidden_size]`」不再是纸面约束，而是**在六个已发布的包上成立的事实**。
+   **仍然未核实的只剩参数拆分**：`loaded_parameters` 里 `text / vision / readout` 各占多少，
+   需要 `MODEL_MANIFEST.json` 的逐项数字（仓里只有总和；`package.py:379-390` 要求三者之和等于它）。
+2. **码表就是字母码：26 个单字母 + 229 个双字母，共 255 个。**
+   `codes` 是 `A`…`Z`（26 个）接 `AA`、`AB`…`JT`（229 个，**不是**完整的 26×26，中途有跳号，
+   例如 `JQ` 不在表里）；`token_ids` 是 255 个互异的整数，**不单调**（`A`→32、`B`→33…，
+   但双字母码的 id 与字母序无关，如末几个是 25310 / 26313 / 81770 / 12185 / 78382）。
+   这与 §16.2 的读法对得上：**码只需要单 token 化并与声明一致，不需要 id 有序**；
+   而 `prompt.py:81` 把码逐行写进 prompt，靠的正是 `A`/`AB` 这种**好分词**的短串。
 
 上游记录里 d3 的一致率与延迟（六个包 × 文本/图/视频，最大概率差 0.0，golden 5/5）
 在 `docs/records/decision3-parity.md:56-109`、`:127-160`，属**上游记录**，本文只引用不重算。
+（同一份记录这次只改了三行措辞：把 *the exact profile* 换成 *each request alone (the golden
+check's reference path)*——正是 §8.4 那次改名的余波。）
+
+### 16.8 初稿之后 d3 长出来的东西：缓存、lane、打包、跨请求合批
+
+`families/decision3/family.py` 这次改了 414 行（721 → 1 061），但**改的全是调度**。
+先把「没变」钉死，再讲「变了什么」：
+
+| 环节 | 变了吗 | 位置 |
+|---|---|---|
+| prompt 布局、chat 模板认脸、tokenizer 的建法 | **没变** | `prompt.py` 整个文件不在 diff 里 |
+| 255 路读出、掩码、`softmax(logits/T)`、host 重归一化、`_confidence` | **没变**（语句逐字相同，仅从 `_pass` 抽成 `_readout`） | `family.py:966-1002`、`:385-386`、`:368-373` |
+| 包身份（`model_sha256` 重算）、255 码校验、`experts`/readout 形状 | **没变** | `package.py` 整个文件不在 diff 里 |
+| golden 参考值 | **没变**（`registry/golden_answers_decision3.json` 不在 diff 里） | 这也是 §13.1 六个数字一个不差的原因 |
+| **怎么把行凑成一次前向** | **全变了** | 下面四条 |
+
+**① 两级内容缓存（新文件 `families/decision3/cache.py`，72 行）。** 模块 docstring 一句话说清
+（`cache.py:1-5`）：*processed media on the host, vision features on its device. Both hold values
+computed exactly as a miss computes them, so a hit changes no answer.* 两个缓存各有字节上限：
+主机侧的媒体（FP32 patch 行）4 GiB，设备侧的视觉特征 2 GiB（`:18`、`:20`）；淘汰是纯 LRU，
+没有 TTL、没有版本（`:44-56`）。
+
+键的设计是这一处最要留意的：媒体键是**内容摘要**（`("image", sha256(data URL 文本))`，`:23-27`），
+而特征键里带着**「一次塔调用装了几份拷贝」**（键 = `(各图摘要, copies)`，`family.py:1004-1021` 的 `_image_features`，docstring 就在 `:1007-1008`）——
+因为*One tower call over k copies is what a k-row pass of the released runtime runs,
+so the cached value is that pass's features exactly*。**合并前向**那一次塔调用算出的特征另存一个键
+（`("merged", digests)`，`family.py:938`、`:962`），注释说 *Those features round as that call does,
+so they are cached apart from the exact path's*（`:923-926`）——**它绝不回填给某个请求自己的前向**。
+
+**② lane：文本行与读图行永不混在一个前向里。** `Decision3Model.lane`（`family.py:452-454`）
+按「这一行要不要读媒体」分成 `"text"` / `"media"`，规划器 `coalesced()` 每条 lane 单独成批
+（`scheduler/batching.py:116-167`），两条 lane 的第 n 批共享一个调度轮次。
+每 lane 的 token 预算由**实测成本**换算：`coalesced_token_budget`（`family.py:456-461`）
+用「本 lane 每 token 多少秒」把 0.3 秒的前向预算折成 token 数，下限 `MIN_COALESCED_TOKENS = 2048`
+（常量在 `:83-87`）。
+
+**③ 打包前向（新文件 `engines/native/models/packed.py`，212 行）。** 阈值是
+`PACK_MIN_PADDING = 0.1`（`family.py:90`）：合并批**只有**在「左填充会把 token 数撑大 10% 以上」
+时才打包（`_packs`，`:809-814`），打包后各行背靠背、读累计末位（`:816-820`）。
+`packed.py:13-14` 把边界写明了：*Packed forwards round differently from padded ones,
+so only merged forwards run them; requests' own forwards stay padded*——
+**请求自己的前向永远是填充的**，打包只发生在「把并发请求合成一批」的那条路上。
+
+**④ 批上限的来源换成了设备类别 + 启动标定**（§8.3）：MI325X 这一类落在 32,768 token / 256 行，
+再经加载期标定收缩——记录里 d3-edge 保持 32,768、d3-mini 收到约 19,000、
+而 **d3 只留 3,328**，理由是它一次 4,096-token 前向本来就要 0.37 秒
+（`docs/records/decision3-lanes-packing.md:20-43`，上游记录）。
+
+三条新记录给出的数字（**都是上游记录，本文没有重算**）：
+
+| 记录 | 量到了什么 |
+|---|---|
+| `decision3-batching.md:29-32` | **缓存不改答案**：开与不开逐字节相同，d3-edge 20/20 条请求、d3 9/9 条（同一批请求各问几遍，后面的答案从缓存里来） |
+| `decision3-batching.md:37-45` | 重复媒体的提速：1.6 MP PNG × 1 问 95→55 ms、× 32 问 682→177 ms；10 秒 1080p 视频 × 1 问 322→126 ms、× 32 问 498→281 ms |
+| `decision3-batching.md:78-83` | **合并批的代价**：d3-edge 29,339 问里 argmax 一致 99.69%、最大/均值 \|Δp\| 0.115 / 0.0027，gold 75.17%→75.18%（CI 含 0）；d3-mini 一致 99.87%、0.059 / 0.0015 |
+| `decision3-batching.md:85-93` | 吞吐：d3-edge 313（4 worker）→ **1,304**（2 worker）req/s |
+| `decision3-lanes-packing.md:105-119` | lanes + 打包之后：d3-edge 29,339 问里 127 个决策变化、最大/中位 \|Δp\| 0.1318 / 0.00112（d3-mini 46 个）；纯文本吞吐的差异（−1.7% ~ +1.2%）落在**这份记录自己量的 run-to-run 噪声**里（`:80-95`，同一份 main 跨 run 就差到 11%） |
+| `decision3-lanes-packing.md:47-60` | 吞吐：d3-edge 60/25/15 混合 122.0→244.5 req/s、纯图 33.2→58.9、长尾 112.9→259.1；**d3 本身各档在 ±5% 内** |
+| `decision3-device-memory.md:28-52` | 显存估算换算法：从「每个参数按 FP32 + 2 GiB」改成「两字节一参数 + 10% 余量 + 2 GiB 激活」，d3 的估计因此从 **99.18 GiB 落到 55.45 GiB**（BF16 权重 48.59 GiB、加载后 50.03、+8.5k token 52.71） |
+
+**这几条并读起来只有一个结论**：d3 这次换的是**吞吐的账**，代价记在「合并前向的概率位移」上
+（99.69% argmax 一致、最大 \|Δp\| 0.13），而**读数的那条链一点没动**。
+它与 §8.4 是同一次改动的两半：运行时整体从「每请求单独跑」转向「并发合批」，
+d3 因为多了媒体与视觉塔，多出 lane 与打包两层。
+
+### 16.9 这次改动**没有**动的一处（容易误判，单独点出来）
+
+`packed.py:193-209` 的 `packed_unavailable()` 说明打包依赖引擎的支持
+（`EngineModel.supports_packed`），`family.py:439-447` 把它记成 `packs_merged_rows`。
+所以在不支持打包的引擎上，合并前向**回落到左填充**——**同一次请求，换一台机器，
+走的可能是两种布局**。读位置在两种布局下都对（§16.3 那张表），
+但**数值上它们不保证逐位相同**（`packed.py:13-14` 自己就写着）。
+这与 §8 那条「批与布局是数值的一部分」是同一句话，只是这次落在同一个模型内部的两种前向之间。
+
+### 16.10 亲手取一次包内声明（不需要权重）
+
+初稿的两条「未核实」是靠这一步解决的，任何人可以复现。**只取小文件与 `safetensors` 头部**：
+
+```bash
+# ① 小文件：钉住的 revision 取 decision_config.json / config.json（几 KB）
+for spec in d3:cbff3a3cb0b074b6585fe9f747b9f9f5557a0e75 \
+            d3-flash:521525effa79469d899a570726547dd7f00da3af \
+            d3-mini:a475367de0d8133a3c1a2a0dc12303d89cfa2ab4 \
+            d3-nano:3aeb1c22a5632aac72353c36b3d0111c40e7dbf4 \
+            d3-lite:a8d25a91ef75552803f7009d25b7bd435991abd9 \
+            d3-edge:18d61df78684675463af9ae732872478845c5a79; do
+  repo=${spec%%:*}; rev=${spec##*:}
+  hf download "vllm-sr/$repo" --revision "$rev" \
+     --include decision_config.json --include config.json --local-dir "/tmp/d3pkg/$repo"
+done
+
+# ② readout 的形状：只取头部 512 字节，**不下权重**
+curl -sL -r 0-511 \
+  "https://huggingface.co/vllm-sr/d3-lite/resolve/a8d25a91ef75552803f7009d25b7bd435991abd9/readout.safetensors" \
+  | python3 -c "import json,struct,sys; b=sys.stdin.buffer.read(); n=struct.unpack('<Q',b[:8])[0]; print(json.loads(b[8:8+n]))"
+```
+
+六个包读出来的东西，按 `decision_config.json` 的字段排列（**来源：包内声明，取自已钉住的 revision**）：
+
+| 包 | `base_model` | `codes` 长度 | `temperature` | `attention_mode` | `readout_dtype` / readout 形状 | `text_config.hidden_size` |
+|---|---|---|---|---|---|---|
+| `d3` | `Qwen/Qwen3.8-27B` | 255 | 1.0 | `noncausal_full_attention` | `float32` / `[255, 5120]` | 5120 |
+| `d3-flash` | `Qwen/Qwen3.5-9B` | 255 | 1.0 | `noncausal_full_attention` | `float32` / `[255, 4096]` | 4096 |
+| `d3-mini` | `Qwen/Qwen3.5-4B` | 255 | 1.0 | `noncausal_full_attention` | `float32` / `[255, 2560]` | 2560 |
+| `d3-nano` | `Qwen/Qwen3.5-2B` | 255 | 1.0 | `noncausal_full_attention` | `float32` / `[255, 2048]` | 2048 |
+| `d3-lite` | `Qwen/Qwen3.5-0.8B` | 255 | 1.0 | `noncausal_full_attention` | `float32` / `[255, 1024]` | 1024 |
+| `d3-edge` | `Qwen/Qwen3.5-0.8B` | 255 | 1.0 | `noncausal_full_attention` | `float32` / `[255, 1024]` | 1024 |
+
+`pooling` 六个都是 `last`，`max_length` 六个都是 `null`（即用包的输入上限），
+`format_id` 都是 `d3-code-readout-v1`、`prompt` 都是 `d3`——**与 §16.1、§16.2 的校验逐条对得上**。
+
+两点必须同时说清，否则这张表会被读过头：
+
+- **这是「包内声明」，不是本文跑出来的行为。** 它证明的是「发布出去的包确实是这么写的」；
+  声明与运行时行为一致这件事，证据在 §16.4 的代码与 §14.5 的重算上。
+- **`base_model` / `revision` 这两个字段本身也是身份的一部分**：它们列在 `INFERENCE_FIELDS` 里
+  （`families/decision3/package.py:44-56`），
+  参与 `model_sha256` 的重算（`:124-132`）。所以「基座换了」在这条线上**不是注释，是换个模型**。
+
+**顺带一条与 revision 有关的提醒**：这六个仓在 Hugging Face 上的 **HEAD 这次都动了**
+（2026-10-15 重新推送），但**上游代码钉的是更早的 commit**（上表第一列的 revision），
+两者**不是同一个 commit**。本文引用的一切都以上游钉住的那个 revision 为准；
+`revision` 只认 Hub API 给的 sha，镜像、tag 名与 `main` 三者常常不是同一个 commit。

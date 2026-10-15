@@ -1,6 +1,6 @@
 # Jev benchmarks：外部基准与看板索引
 
-本仓自己的走查只读代码与已发布的产物，**不跑上游程序、不出分数**（见 [`comparison.md`](comparison.md) §5）。要查"某个模型在这类基准上考了多少分"，得去下面这些外部页面。
+本仓自己的走查只读代码与已发布的产物，**不跑上游程序、不出分数**（见 [`docs/comparison.md`](../docs/comparison.md) §5）。要查"某个模型在这类基准上考了多少分"，得去下面这些外部页面。
 
 本文只做**链接索引**：每条给出页面标题与它自己的自述，不复制分数、不做跨页排名对比。任何要引用数字的场合，回到对应页面按它自己的口径核。
 
@@ -10,7 +10,7 @@
 | 2 | JevBench 看板（Benchmark Heaven） | <https://benchmarkheaven.com/jev-models> | 第三方看板，逐行标架构类 |
 | 3 | Decision Model Leaderboard | <https://clef-evals.workers-ai-mle.workers.dev/> | 社区 Decision Index 排行榜（含 Cloudflare Clef） |
 | 4 | Jev Decision Index（HF Space） | <https://huggingface.co/spaces/multimodalart/jev-decision-index> | 开源复现的逐模型看板 |
-| 5 | Open-Jev benchmarks | <https://zefan-cai.github.io/open-jev/benchmarks/> | 上游自己的基准结果页（与本仓 [`docs/open-jev/`](open-jev/typed-decision-model.md) 同一上游） |
+| 5 | Open-Jev benchmarks | <https://zefan-cai.github.io/open-jev/benchmarks/> | 上游自己的基准结果页（与本仓 [`docs/open-jev/`](../docs/open-jev/typed-decision-model.md) 同一上游） |
 | 6 | Microsoft-Decision-1 | <https://commandline.microsoft.com/microsoft-decision-1-model-foundry/> | 厂商发布文（决策打分模型） |
 
 ---
@@ -41,7 +41,7 @@
 
 页面标题：**JevBench — AI decision model benchmark & leaderboard | Benchmark Heaven**
 
-第三方维护的看板。本仓 [`comparison.md`](comparison.md) §1.1 用的是它的 `/jev-models/all` 视图（该处记为 **board v1.7.46、2026-10-13 更新、共 192 行**）：看板给**每一行**标一个**架构类**，八类只表架构、不改分数与排名。
+第三方维护的看板。本仓 [`docs/comparison.md`](../docs/comparison.md) §1.1 用的是它的 `/jev-models/all` 视图（该处记为 **board v1.7.46、2026-10-13 更新、共 192 行**）：看板给**每一行**标一个**架构类**，八类只表架构、不改分数与排名。
 
 抓取时注意：该站要带代理（`--proxy 127.0.0.1:7890 -k`），且类别写在 tooltip 标题里而不是单元格文本里。
 
@@ -77,7 +77,7 @@ Space 自述：浏览一个给 **Jev 模型的开源复现**排名的看板，�
 这一条和本仓的口径最贴，值得单独留意两点：
 
 - **它把「版本」摆到台面上**：页面明写 *Keep benchmark versions separate*。那 231 张公开表用的是**历史** JevBench commit `f8ce713`；v1.4 报告里 9B 的 29.9 %（sealed）对 77.5 %（public）**两边的难度构成不同**，页面自己声明 *This remains a historical record, not the current result*。另一份独立快照标的是 JevBench **v1.5.4**、观测于 2026-10-02 PDT，904 公开 + 720 sealed。
-- **它就是本仓 [`docs/open-jev/`](open-jev/typed-decision-model.md) 那一篇的上游**（[Zefan-Cai/Open-Jev](https://github.com/Zefan-Cai/Open-Jev)）自己出的结果页——所以那条路线的走查与它这里的分数据出于同一方，**不是独立复现**。
+- **它就是本仓 [`docs/open-jev/`](../docs/open-jev/typed-decision-model.md) 那一篇的上游**（[Zefan-Cai/Open-Jev](https://github.com/Zefan-Cai/Open-Jev)）自己出的结果页——所以那条路线的走查与它这里的分数据出于同一方，**不是独立复现**。
 
 ## 6. Microsoft-Decision-1 —— 厂商发布文
 

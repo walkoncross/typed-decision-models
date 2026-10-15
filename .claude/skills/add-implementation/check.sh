@@ -11,14 +11,19 @@ fail=0
 ok()  { printf '  ok    %s\n' "$1"; }
 bad() { printf '  FAIL  %s\n' "$1"; fail=1; }
 
-# 收录在 docs/<实现名>/ 下的文档（comparison.md 等跨实现文档在顶层，不参与）。
+# 收录在 docs/<实现名>/ 下的文档（comparison.md 等跨实现文档在 docs/ 顶层，benchmarks/ 下的
+# 基准索引与打分口径说明同样不是实现，两者都不参与第 3/4/7/8/9 项）。
 impl_docs() { find docs -mindepth 2 -name '*.md' | sort; }
+
+# 全仓的文档根：docs/ 收实现走查与跨实现总表，benchmarks/ 收外部基准与看板的索引和口径。
+# 第 1/5/6/10 项按文档查，两处都要扫，否则 benchmarks/ 下的文件等同于免检。
+DOC_ROOTS=(docs benchmarks)
 
 echo "== 1. 编码（应为 UTF-8）=="
 while IFS= read -r f; do
   enc=$(file -I "$f" | sed -n 's/.*charset=//p')
   if [ "$enc" = "utf-8" ]; then ok "$f"; else bad "$f 编码=${enc}（应为 utf-8）"; fi
-done < <(find docs -name '*.md' | sort)
+done < <(find "${DOC_ROOTS[@]}" -name '*.md' | sort)
 
 echo "== 2. 目录结构（每个实现子目录下至少一篇）=="
 for d in docs/*/; do
@@ -52,7 +57,7 @@ done < <(impl_docs)
 echo "== 5. 正文不含本机绝对路径 =="
 # 只查真正的用户目录绝对路径。文中的 /path/to/xxx、/opt/... 是示例占位，不算问题；
 # 不查 Windows 盘符形式——它会把 Python 字符串里的 "Answer:\n" 这类误判成路径。
-if hits=$(grep -rnE '/Users/|/home/' docs --include='*.md'); then
+if hits=$(grep -rnE '/Users/|/home/' "${DOC_ROOTS[@]}" --include='*.md'); then
   bad "发现绝对路径："
   printf '%s\n' "$hits" | sed 's/^/        /'
 else
@@ -60,7 +65,7 @@ else
 fi
 
 echo "== 6. 相对链接可解析 =="
-# 只查收录文档（docs/ 与 README）：skill 正文里的模板路径是占位符，不是待解析链接。
+# 只查收录文档（docs/、benchmarks/ 与 README）：skill 正文里的模板路径是占位符，不是待解析链接。
 broken=$(while IFS= read -r f; do
   d=$(dirname "$f")
   grep -oE '\]\([^)]*\.md[^)]*\)' "$f" 2>/dev/null \
@@ -71,7 +76,7 @@ broken=$(while IFS= read -r f; do
           [ -f "$d/$l" ] || echo "$f -> $l"
         fi
       done
-done < <(find docs -name '*.md'; echo README.md))
+done < <(find "${DOC_ROOTS[@]}" -name '*.md'; echo README.md))
 if [ -z "$broken" ]; then ok "全部可解析"; else bad "断链："; printf '%s\n' "$broken" | sed 's/^/        /'; fi
 
 echo "== 7. README 目录表已登记 =="
@@ -132,7 +137,7 @@ tbl_bad=$(while IFS= read -r f; do
       }
     }
   ' "$f"
-done < <(find docs -name '*.md'; echo README.md) | sort)
+done < <(find "${DOC_ROOTS[@]}" -name '*.md'; echo README.md) | sort)
 if [ -z "$tbl_bad" ]; then ok "全部表格完整"; else bad "表格错位（裸竖线转义成 \\|；被空行断开的表把行接回去）："; printf '%s\n' "$tbl_bad" | sed 's/^/        /'; fi
 
 echo

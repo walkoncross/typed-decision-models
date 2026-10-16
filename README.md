@@ -42,10 +42,11 @@
 | JevBench 看板 | <https://benchmarkheaven.com/jev-models> | 第三方看板,**本仓 `comparison.md` §1.1 的架构分类就取自它的 `/all` 视图** |
 | Decision Model Leaderboard | <https://clef-evals.workers-ai-mle.workers.dev/> | 社区 Decision Index 榜,含 Cloudflare Clef;页面把 Decision Index 与 median latency 并置 |
 | Jev Decision Index | <https://huggingface.co/spaces/multimodalart/jev-decision-index> | Hugging Face Space:给 Jev 的**开源复现**排名,数据分公开基准 / 私有测试 / 新领域任务三类 |
+| Decision Index 0.3 | <https://benchlm.ai/benchmarks/decisionindex> | 第三方**镜像页**:把上一条那份榜钉在 commit `f03e5a6` 上重排,自陈 20 % 公开 / 50 % 同技能私有 / 30 % 新领域私有,且不计入其站点总分 |
 | Open-Jev benchmarks | <https://zefan-cai.github.io/open-jev/benchmarks/> | **走查对象自己出的**结果页(JevBench & JF100、TREC 检索、延迟、留出),逐表保留自己的指标与分母 |
 | Microsoft-Decision-1 | <https://commandline.microsoft.com/microsoft-decision-1-model-foundry/> | 厂商发布文(决策打分模型),文内日期 2026.10.09 |
 
-三条抓取注意:`benchmarkheaven` 要带代理(`--proxy 127.0.0.1:7890 -k`,类别写在 tooltip 标题里而不是单元格文本里);huggingface.co 在本机直连超时,同样走代理;`clef-evals` 那条是 SPA,内容不在 HTML 里,直接抓只能拿到 meta。
+四条抓取注意:`benchmarkheaven` 要带代理(`--proxy 127.0.0.1:7890 -k`,类别写在 tooltip 标题里而不是单元格文本里);huggingface.co 在本机直连超时,同样走代理;`clef-evals` 那条是 SPA,内容不在 HTML 里,直接抓只能拿到 meta;`benchlm.ai` 与它相反——内容在 HTML 里、直连可通,页面还自带一份 markdown 版(`/md/benchmarks/decisionindex.md`)。
 
 ## 关于各篇文档
 

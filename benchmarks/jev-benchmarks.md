@@ -12,6 +12,7 @@
 | 4 | Jev Decision Index（HF Space） | <https://huggingface.co/spaces/multimodalart/jev-decision-index> | 开源复现的逐模型看板 |
 | 5 | Open-Jev benchmarks | <https://zefan-cai.github.io/open-jev/benchmarks/> | 上游自己的基准结果页（与本仓 [`docs/open-jev/`](../docs/open-jev/typed-decision-model.md) 同一上游） |
 | 6 | Microsoft-Decision-1 | <https://commandline.microsoft.com/microsoft-decision-1-model-foundry/> | 厂商发布文（决策打分模型） |
+| 7 | Decision Index 0.3（BenchLM.ai） | <https://benchlm.ai/benchmarks/decisionindex> | 第三方**镜像**看板：把第 4 条那份榜钉在一个 commit 上重排 |
 
 ---
 
@@ -90,11 +91,32 @@ Space 自述：浏览一个给 **Jev 模型的开源复现**排名的看板，�
 
 注意 URL 里带 `model-foundry`，但正文大标题是 "Introducing Microsoft-Decision-1" ——**引用时以正文为准**。
 
+## 7. Decision Index 0.3 —— BenchLM.ai 的镜像页
+
+<https://benchlm.ai/benchmarks/decisionindex>
+
+页面标题：**Decision Index 0.3 Full Scores | BenchLM.ai**
+meta 自述：*Compare the 112 systems on Decision Index 0.3. The full score combines public and private task aggregates and stays separate from general model rankings.*
+页内日期栏：**Last updated: October 6, 2026 · mirrored from the public benchmark leaderboard**
+
+这一条与上面第 4 条**是同一份榜**：页内三条外链全指向那个 Hugging Face Space（榜单本体、`methodology.html`、Space README），数据源还**钉在一个 commit 上**（页内写作 *Pinned data source at commit f03e5a6*，链到 Space 该 revision 的 `data/` 目录）。所以它**不是独立测量**，是第三方镜像——引用时按这一层理解，别把它当成第二份证据。
+
+它自己的口径说明（页内「How we show Decision Index 0.3」）：
+
+- **合成权重**：37 个公开基准 20 %、**同技能的私有测试 50 %**、新领域私有任务 30 %（页面另给一个 `20% public · 80% private` 的摘要）。
+- 源方报告 **110,201 条决策**；分数做过**机会校正（chance-corrected）与覆盖度校正（coverage-adjusted）**，未支持或未作答的请求**计为错**。
+- 它自己声明镜像的边界：聚合值含私有任务结果，但**题目内容与逐题答案不公开**，那部分**无法从公开榜单独立复核**。
+- 最后一句留给 BenchLM 自己：这一列**显示但不计入**它的加权总分（*excluded from the scoring formula*），所以不动它自家那套模型总排名。
+
+抓取注意：与第 3 条相反，这一页**内容在 HTML 里**（服务端渲染），直接抓就拿到全表；页面另给一份 markdown 版（`<link rel="alternate" type="text/markdown" href="https://benchlm.ai/md/benchmarks/decisionindex.md">`）。本机直连可通，**不用挂代理**。
+
+站点背景：BenchLM.ai 首页自述 *LLM Leaderboard & AI Model Benchmarks*，本页属其 Decision Models 类目。
+
 ---
 
 ## 核验记录
 
-- 六条链接于 **2026-10-14** 逐一请求，**均返回 200**。
+- 前六条链接于 **2026-10-14** 逐一请求，**均返回 200**；第 7 条于 **2026-10-16** 请求，返回 200。
 - 各条标题、自述、日期均取自**页面自身**的 `<title>` / meta / 正文，不是转述。
 - 本文**不含**任何分数、排名或跨页对比——那些一律回到上表对应页面按其口径核。
 

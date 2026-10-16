@@ -46,6 +46,9 @@
 > 分类器面，2.0 才长出 decision 契约**（`vela2` 的 `surfaces` 是 `{"decisions"}`）。
 > 但 Vela 1.0 与这条线并非无关：**它是 Decision 1.0 编码器路径的基座**——
 > `Vela-1.0-Encoder-307M` 微调出 `Decision-1.0-Kai-0.6B`（§16.10 的基座链）。
+>
+> 需要留意的是，**「Vela」在本文里指三个不同的东西**（Vela 1.0 / `vela-encoder` / Vela 2.0），
+> 其中只有一个家族名挂在 `/v1/decisions` 上——三者与四代的交替关系收在 **§2.4** 的一张表里。
 
 先说结论式的三句话，后面逐条给代码位置：
 
@@ -228,6 +231,9 @@ Vela 2.0 把题型扩到 5 种：`QUESTION_TYPES = (*SYSTEM_ONE_TYPES, *LABELLED
 | `vela2-unified` / `vela2-decoder` | Vela 2.0 的 0.3B / 0.8B / 4B / 9B（`families/vela2/`） | 一个 `[O]` 标记（Choice / Score）或一个 `[E]` 标签标记 | 标记位置经 `MarkerHead` 的标量 |
 | `decision3` | Decision 3.0 的 d3 / d3-flash / d3-mini / d3-nano / d3-lite / d3-edge（`families/decision3/`） | 一行 `码: 选项文本`，码是**包里声明的 255 个答案码之一**，且必须单 token | 该题 prompt **最后一个位置**的 hidden state 与 `readout` 里**码 i 那一行**的点积（§16） |
 
+（插一句免得按名字找错家族：表第一行的 **`vela-encoder` 归 `decision1`**，是 Decision 1.0 的
+Kai / Lex / Route 用的读法，不是 `vela2`；「Vela」这三个所指的对照见 §2.4。）
+
 **四个家族（decision1 / decision2 / decision3 / vela2）配四套读法，但不是一一对应**：
 Decision 2.0 **没有自己的第五套读法**——它整段复用第二套，
 `families/decision2/family.py:30` 与 `:43` 分别 import 的正是 `heads/candidate.py` 与
@@ -256,6 +262,53 @@ Decision 1.0 与 Decision 2.0 的 Kai 同名不同族：1.0 的 Kai 走 `vela-en
 （`registry/tables/decision1.py:17-20`，571,909,635 参数），2.0 的 Kai 走 `decision2` 家族
 （`registry/tables/decision2.py:9-14`，597,103,104 参数）。**同一个名字，两套读法。**
 跨代引用数字之前必须先确认是哪一代——这是本仓最容易踩的口径坑。
+
+### 2.4 「Vela」与「Decision」不是两条产品线：三个所指与一条交替的代次线
+
+按名字检索这一路，很容易得出「Vela 线 vs Decision 线」的印象，但代码里没有这两条线。
+**「Vela」在本仓指三个不同的东西**，其中只有一个家族名挂在 `/v1/decisions` 上：
+
+| 文中写法 | 家族 / 位置 | 是什么 | 走 `/v1/decisions`？ |
+|---|---|---|---|
+| **Vela 1.0** | `task_heads`（`families/task_heads/family.py:419`） | 12 个任务仓 + `Qwen3-Embedding-0.6B`；每个仓是 FP32 ModernBERT + 一个**训练好的头**（约 307.5M 参数，`registry/tables/vela1.py:33-40`） | **不**：`surfaces` 是 `{"classify","embeddings","rerank"}` |
+| `vela-encoder` | **`decision1` 家族内的一条 runtime**（`families/decision1/vela.py`） | Decision 1.0 的 Kai / Lex / Route 用的那套读法 | 是（随 `decision1`） |
+| **Vela 2.0** | `vela2`（`families/vela2/`） | 0.3B / 0.8B / 4B / 9B 四个包 | 是：`surfaces` 是 `{"decisions"}` |
+
+判据是 `surfaces` 里有没有 `"decisions"`（`plugins/base.py:927-934`）：**Vela 1.0 不算这一路的模型，Vela 2.0 算**——
+同一条 Vela 线，1.0 停在编码器 / 分类器面，2.0 才长出 decision 契约。两者的读法也不同源：
+Vela 1.0 读的是**训练好的头**，标签集来自**包**（`ClassifyRequest` 只有 `{model, input, head, options}`，
+`api/openapi.yaml:656-670`）；decision 面读的是为每个选项**现构造出来的位置**，标签集来自**请求**（§2.1）。
+`registry/tables/` 里 `vela1.py` 与 `omni.py` 因此单独放着（§12），本文只在基座那一处提到它们。
+
+所以四个 decisions 家族排出来的不是两条平行线，而是**一条交替的线**：
+
+```
+Decision 1.0 ──► Decision 2.0 ──► Vela 2.0 ──► Decision 3.0
+ decision1        decision2        vela2         decision3
+（独占两套读法）  （复用第二套）    （第三套）     （第四套）
+```
+
+**能拉成「Vela 系对 Decision 系」的对照，只有两条腿站得住**——`vela-encoder` 对 decoder 读法，
+以及 `vela2` 对 `decision2` / `decision3`。跨这四代引用任何数字之前，先看下表：
+
+| 维度 | Vela 系 | Decision 系 |
+|---|---|---|
+| 一个选项在输入里 | `vela-encoder`：选项前一个 `[marker]`（= 分词器的 MASK token）；Vela 2.0：一个 `[O]`（Choice / Score）或一个 `[E]` 标记 | decoder：一个 `<option>…</option>` 段；d3：一行 `码: 选项文本` |
+| 被评分的量 | `[marker]` 位置过题型头后的一个标量；Vela 2.0 是标记位置过 `MarkerHead` | 段**末位** hidden 对 query 行的打分；d3 是末位 hidden 与 `readout` 第 i 行的点积 |
+| 读几个位置 | 每题 K 个槽位；Vela 2.0 是每题若干标记 | K 个端点 + 1 个 query；**d3 每题 1 个，是真末位** |
+| 题型集 | `vela-encoder` 三型；**Vela 2.0 五型**（多出 `set` / `span`，§2.1） | 四代都是三型（`choice` / `noul` / `score`，§2.1、§16.3） |
+| 温度 | `vela-encoder` **没有温度**，包带 calibration 即 `PackageError` | D1 decoder 的温度**不许缺**，D2 可缺省（默认 1.0），d3 的温度是**身份字段** |
+| 重归一化 | encoder 在设备侧 softmax 后就结束，host 不碰 | 在 host 上 float64 再归一化一遍 |
+| 谁改 argmax | Vela 2.0 是四代里唯一能改的（阈值族 + `noul_calibration`）；`vela-encoder` 完全不标定 | 温度单调、不改 argmax；D2 的 `score_bias` 对 Score 不适用（本来就没有 argmax） |
+| `confidence` | top-two margin / `1 − var/uniform`（`vela-encoder` 与 `vela2` 同一条） | D2 与 d3 用归一化熵 `1 − H/log k`；D1 decoder 是 `decision_type_aware_v1` |
+
+两处反例要单独记住，它们恰好把「Vela 系」这个说法拆开：**Vela 2.0 的整个 softmax 在 host 的 float64 里做**
+（`families/vela2/answers.py:57-67`），所以「设备侧 softmax、host 不碰」只对 `vela-encoder` 成立；
+而 **`vela2` 与 `decision2` 的 `confidence` 公式不同**（一个是 margin，一个是归一化熵）。
+也就是说，这两条「腿」各自都不齐——按代次读，比按 Vela / Decision 这个二分读，稳得多。
+
+展开处：掩码与数值口径在 §5.1–§5.3，`confidence` 的三条公式在 §10.1，谁在改发布数值在 §10.2、
+温度在 §10.3；d3 那第四套读法整段在 §16。§2.3 的「同名不同族」是这张表最常被踩到的一处。
 
 ---
 

@@ -13,6 +13,7 @@
 | 5 | Open-Jev benchmarks | <https://zefan-cai.github.io/open-jev/benchmarks/> | 上游自己的基准结果页（与本仓 [`docs/open-jev/`](../docs/open-jev/typed-decision-model.md) 同一上游） |
 | 6 | Microsoft-Decision-1 | <https://commandline.microsoft.com/microsoft-decision-1-model-foundry/> | 厂商发布文（决策打分模型） |
 | 7 | Decision Index 0.3（BenchLM.ai） | <https://benchlm.ai/benchmarks/decisionindex> | 第三方**镜像**看板：把第 4 条那份榜钉在一个 commit 上重排 |
+| 8 | S1MB Leaderboard（HF Space） | <https://huggingface.co/spaces/hotchpotch/S1MB-leaderboard> | 独立基准看板：System One 决策模型的固定样本评测结果（非 JevBench） |
 
 ---
 
@@ -112,11 +113,36 @@ meta 自述：*Compare the 112 systems on Decision Index 0.3. The full score com
 
 站点背景：BenchLM.ai 首页自述 *LLM Leaderboard & AI Model Benchmarks*，本页属其 Decision Models 类目。
 
+## 8. S1MB Leaderboard —— 独立的 System One 决策基准看板
+
+<https://huggingface.co/spaces/hotchpotch/S1MB-leaderboard>
+
+页面标题：**S1MB Leaderboard - a Hugging Face Space by hotchpotch**
+meta 自述：*This page displays the fixed‑sample evaluation results for the Choice, Noul, and Score models. Simply open the page and wait while the latest benchmark scores are loaded and shown in a clear leaderboard.*
+
+Space README 自述 **S1MB = System One Mosaic Benchmark**：评测**System One 决策模型**——把文本与指令转成结构化决策的模型，统一三类决策：
+
+| 类型 | 含义 |
+|---|---|
+| Choice | 从一组候选中选一个 |
+| Noul | 按给定定义做是/否判断 |
+| Score | 按给定标准给数值分 |
+
+任务由公开 NLP 数据集与合成任务拼成，后者改变指令、上下文与判定标准。README 自己划的边界：*Its scores do not establish unseen-task generalization or training-data non-overlap.* ——分数不证明对未见任务的泛化，也不证明训练数据没有重叠。
+
+配套入口：基准介绍（HF blog）、英文集 `hotchpotch/S1MB-english-v1`、日文集 `hotchpotch/S1MB-japanese-v1`、视觉集 `hotchpotch/S1MB-vision-v1`（**私有**）、公开结果集 `hotchpotch/s1mb-result`。
+
+**这一条与 JevBench 不是同一套题**：它按自己这三类决策打分，**不能与第 1、3、4 条的 Decision Index 并列**。Space 是**已保存测量结果的交互式查看器**：不加载模型权重、不跑推理；显示数据由公开结果集预生成，随重新部署更新。顶部的评测范围选择器可切换 `english-v1` / `japanese-v1` / `vision-v1`；视觉榜排 Noul / Choice / Score，可选的 Box 与 gen-box **单列显示、不计入排名**。缺失或失败的测量**保留为可见的缺口**，不补分。
+
+Space 元数据（2026-10-19 经 HF API 读取）：创建于 **2026-09-29**、最近更新 **2026-10-19**；SDK 为 docker，许可 MIT。README 的 `models` 字段与 `models.py` 列出 **188 个**有公开 S1MB 结果的 HF 模型仓，仅为 Hub 自动关联用的字面引用，不是推理入口。
+
+> 访问注意：与其他 huggingface.co 页面一样，本机直连会超时，走 Clash 代理 `127.0.0.1:7890`。
+
 ---
 
 ## 核验记录
 
-- 前六条链接于 **2026-10-14** 逐一请求，**均返回 200**；第 7 条于 **2026-10-16** 请求，返回 200。
+- 前六条链接于 **2026-10-14** 逐一请求，**均返回 200**；第 7 条于 **2026-10-16** 请求，返回 200；第 8 条于 **2026-10-19** 经代理请求，返回 200。
 - 各条标题、自述、日期均取自**页面自身**的 `<title>` / meta / 正文，不是转述。
 - 本文**不含**任何分数、排名或跨页对比——那些一律回到上表对应页面按其口径核。
 
